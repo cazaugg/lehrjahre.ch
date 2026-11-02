@@ -1,15 +1,18 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { apiFetch } from '../api'
+import { useAuthStore } from '../stores/auth'
 import ModalDialog from '../components/ui/ModalDialog.vue'
 import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
 
+const auth = useAuthStore()
 const nodes = ref([])
 const error = ref('')
 
 // Search & Filter
 const searchQuery = ref('')
 const filterTopic = ref('')
+const filterAuthor = ref('')
 const expandedIds = ref({})
 const editingNodeId = ref(null)
 
@@ -25,30 +28,62 @@ const createTitle = ref('')
 const createDescription = ref('')
 const createContent = ref('')
 
-const topics = computed(() => nodes.value.filter((n) => !n.parent_id))
+function canManage(node) {
+  return Boolean(node) && node.owner === auth.user?.id
+}
 
-const topicMap = computed(() => {
-  const m = {}
-  for (const t of topics.value) {
-    m[t.id] = t.title
+const topics = computed(() =>
+  nodes.value
+    .filter((n) => !n.parent_id)
+    .sort((a, b) => a.id - b.id)
+)
+
+const ownTopics = computed(() => topics.value.filter((topic) => canManage(topic)))
+
+const availableAuthors = computed(() => {
+  const authors = new Map()
+  for (const node of nodes.value) {
+    if (node.author) {
+      authors.set(node.author, node.author_name || 'Unbekannt')
+    }
   }
-  return m
+  return [...authors.entries()].sort((a, b) =>
+    a[1].localeCompare(b[1], 'de-CH')
+  )
 })
 
-const filteredNodes = computed(() => {
+const groupedTopics = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  return nodes.value.filter((n) => {
-    if (filterTopic.value) {
-      const tid = Number(filterTopic.value)
-      if (n.id !== tid && n.parent_id !== tid) return false
-    }
-    if (q) {
-      const hay = `${n.title} ${n.description || ''} ${n.content || ''}`.toLowerCase()
-      if (!hay.includes(q)) return false
-    }
-    return true
-  })
+  const selected = filterTopic.value ? Number(filterTopic.value) : null
+  const selectedAuthor = filterAuthor.value ? Number(filterAuthor.value) : null
+  const matches = (node) =>
+    !q ||
+    `${node.title} ${node.description || ''} ${node.content || ''}`
+      .toLowerCase()
+      .includes(q)
+  const authorMatches = (node) =>
+    !selectedAuthor || node.author === selectedAuthor
+
+  return topics.value
+    .filter((topic) => !selected || topic.id === selected)
+    .map((topic) => {
+      const topicAuthorMatches = authorMatches(topic)
+      const topicMatches = matches(topic)
+      const pages = nodes.value
+        .filter((node) => node.parent_id === topic.id && authorMatches(node))
+        .filter((node) => topicAuthorMatches || matches(node))
+        .sort((a, b) => a.id - b.id)
+      const visible = topicAuthorMatches
+        ? topicMatches || pages.length > 0
+        : pages.length > 0
+      return { ...topic, pages, visible }
+    })
+    .filter((topic) => topic.visible)
 })
+
+const entryCount = computed(() =>
+  groupedTopics.value.reduce((sum, topic) => sum + 1 + topic.pages.length, 0)
+)
 
 async function loadKnowledge() {
   error.value = ''
@@ -145,7 +180,7 @@ async function deleteNode(node) {
       <div>
         <h1 class="page-title">Wissen & Notizen</h1>
         <p class="page-subtitle">
-          Nachschlagewerk, Fachnotizen und Formelsammlung (Neueste zuerst)
+          Nachschlagewerk, Fachnotizen und Formelsammlung – nach Themen gruppiert
         </p>
       </div>
       <div class="flex-gap">
@@ -155,7 +190,7 @@ async function deleteNode(node) {
         <button
           type="button"
           class="btn btn-primary"
-          @click="openCreate(topics[0]?.id || '')"
+          @click="openCreate(ownTopics[0]?.id || '')"
         >
           + Neue Seite
         </button>
@@ -180,59 +215,67 @@ async function deleteNode(node) {
         </option>
       </select>
 
-      <span class="text-muted">{{ filteredNodes.length }} Einträge</span>
+      <select
+        v-if="auth.isTrainer"
+        v-model="filterAuthor"
+        class="form-control filter-select"
+      >
+        <option value="">Alle Autoren</option>
+        <option v-for="[id, name] in availableAuthors" :key="id" :value="id">
+          {{ name }}
+        </option>
+      </select>
+
+      <span class="text-muted">{{ entryCount }} Einträge</span>
     </div>
 
-    <!-- Collapsible List of Knowledge Entries -->
-    <div v-if="filteredNodes.length === 0" class="card empty-state">
+    <!-- Subjects with their pages -->
+    <div v-if="groupedTopics.length === 0" class="card empty-state">
       Keine passenden Wissenseinträge gefunden.
     </div>
 
     <div v-else>
       <div
-        v-for="node in filteredNodes"
-        :key="node.id"
+        v-for="topic in groupedTopics"
+        :key="topic.id"
         class="collapsible-card"
       >
-        <div class="collapsible-header" @click="toggleExpand(node)">
+        <div class="collapsible-header" @click="toggleExpand(topic)">
           <div class="flex-gap">
             <span class="expand-indicator">
-              {{ expandedIds[node.id] ? '▾' : '▸' }}
+              {{ expandedIds[topic.id] ? '▾' : '▸' }}
             </span>
             <div>
               <div class="flex-gap">
-                <strong>{{ node.title }}</strong>
+                <strong>{{ topic.title }}</strong>
+                <span class="badge badge-success">Hauptthema</span>
                 <span
-                  class="badge"
-                  :class="node.parent_id ? 'badge-info' : 'badge-success'"
+                  v-if="auth.isTrainer && topic.author_name"
+                  class="badge badge-neutral"
                 >
-                  {{
-                    node.parent_id
-                      ? `Seite in: ${topicMap[node.parent_id] || 'Thema'}`
-                      : 'Hauptthema'
-                  }}
+                  {{ topic.author_name }}
                 </span>
+                <span class="text-muted">{{ topic.pages.length }} Seiten</span>
               </div>
-              <div v-if="node.description" class="text-muted" style="margin-top: 2px">
-                {{ node.description }}
+              <div v-if="topic.description" class="text-muted" style="margin-top: 2px">
+                {{ topic.description }}
               </div>
             </div>
           </div>
 
           <div class="flex-gap" @click.stop>
             <button
-              v-if="!node.parent_id"
               type="button"
               class="btn btn-sm"
-              @click="openCreate(node.id)"
+              @click="openCreate(topic.id)"
             >
               + Unterseite
             </button>
           </div>
         </div>
 
-        <div v-if="expandedIds[node.id]" class="collapsible-body">
-          <div v-if="editingNodeId === node.id">
+        <div v-if="expandedIds[topic.id]" class="collapsible-body">
+          <div v-if="editingNodeId === topic.id">
             <div class="form-group">
               <label class="form-label">Titel *</label>
               <input v-model="editTitle" type="text" class="form-control" required />
@@ -241,10 +284,6 @@ async function deleteNode(node) {
               <label class="form-label">Kurzbeschreibung</label>
               <input v-model="editDescription" type="text" class="form-control" />
             </div>
-            <div class="form-group">
-              <label class="form-label">Seiteninhalt (Markdown)</label>
-              <MarkdownEditor v-model="editContent" :rows="12" />
-            </div>
             <div class="flex-between">
               <button type="button" class="btn" @click="editingNodeId = null">
                 Abbrechen
@@ -252,7 +291,7 @@ async function deleteNode(node) {
               <button
                 type="button"
                 class="btn btn-primary"
-                @click="saveEdit(node)"
+                @click="saveEdit(topic)"
               >
                 Änderungen speichern
               </button>
@@ -260,29 +299,122 @@ async function deleteNode(node) {
           </div>
 
           <div v-else>
-            <div class="flex-between" style="margin-bottom: var(--space-3)">
-              <div v-if="node.document" class="text-muted">
-                Gespeichert unter: <code>/data/documents/{{ node.document.path }}</code>
-              </div>
+            <div
+              v-if="canManage(topic)"
+              class="flex-between"
+              style="justify-content: flex-end"
+            >
               <div class="flex-gap">
                 <button
                   type="button"
                   class="btn btn-sm"
-                  @click="startEdit(node)"
+                  @click="startEdit(topic)"
                 >
                   Bearbeiten
                 </button>
                 <button
                   type="button"
                   class="btn btn-sm btn-danger"
-                  @click="deleteNode(node)"
+                  @click="deleteNode(topic)"
                 >
                   Löschen
                 </button>
               </div>
             </div>
+          </div>
 
-            <MarkdownEditor :model-value="node.content" :readonly="true" />
+          <div class="subject-pages">
+            <div v-if="topic.pages.length === 0" class="text-muted">
+              Noch keine Seiten in diesem Thema.
+            </div>
+
+            <div
+              v-for="page in topic.pages"
+              :key="page.id"
+              class="collapsible-card page-card"
+            >
+              <div class="collapsible-header" @click="toggleExpand(page)">
+                <div class="flex-gap">
+                  <span class="expand-indicator">
+                    {{ expandedIds[page.id] ? '▾' : '▸' }}
+                  </span>
+                  <div>
+                    <div class="flex-gap">
+                      <strong>{{ page.title }}</strong>
+                      <span
+                        v-if="auth.isTrainer && page.author_name"
+                        class="badge badge-neutral"
+                      >
+                        {{ page.author_name }}
+                      </span>
+                    </div>
+                    <div
+                      v-if="page.description"
+                      class="text-muted"
+                      style="margin-top: 2px"
+                    >
+                      {{ page.description }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="expandedIds[page.id]" class="collapsible-body">
+                <div v-if="editingNodeId === page.id">
+                  <div class="form-group">
+                    <label class="form-label">Titel *</label>
+                    <input v-model="editTitle" type="text" class="form-control" required />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Kurzbeschreibung</label>
+                    <input v-model="editDescription" type="text" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Seiteninhalt (Markdown)</label>
+                    <MarkdownEditor v-model="editContent" :rows="12" />
+                  </div>
+                  <div class="flex-between">
+                    <button type="button" class="btn" @click="editingNodeId = null">
+                      Abbrechen
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-primary"
+                      @click="saveEdit(page)"
+                    >
+                      Änderungen speichern
+                    </button>
+                  </div>
+                </div>
+
+                <div v-else>
+                  <div
+                    v-if="canManage(page)"
+                    class="flex-between"
+                    style="margin-bottom: var(--space-3); justify-content: flex-end"
+                  >
+                    <div class="flex-gap">
+                      <button
+                        type="button"
+                        class="btn btn-sm"
+                        @click="startEdit(page)"
+                      >
+                        Bearbeiten
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-danger"
+                        @click="deleteNode(page)"
+                      >
+                        Löschen
+                      </button>
+                    </div>
+                  </div>
+
+                  <MarkdownEditor :model-value="page.content" :readonly="true" />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -300,7 +432,7 @@ async function deleteNode(node) {
           <label class="form-label">Übergeordnetes Thema (optional)</label>
           <select v-model="createParentId" class="form-control">
             <option value="">Kein übergeordnetes Thema (Neues Hauptthema)</option>
-            <option v-for="t in topics" :key="t.id" :value="t.id">
+            <option v-for="t in ownTopics" :key="t.id" :value="t.id">
               {{ t.title }}
             </option>
           </select>
@@ -331,3 +463,20 @@ async function deleteNode(node) {
     </ModalDialog>
   </div>
 </template>
+
+<style scoped>
+.subject-pages {
+  margin-top: var(--space-5);
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+}
+
+.page-card {
+  box-shadow: none;
+}
+
+.page-card:last-child {
+  margin-bottom: 0;
+}
+</style>

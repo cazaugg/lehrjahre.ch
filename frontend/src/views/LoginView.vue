@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import BrandLogo from '../components/ui/BrandLogo.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -34,9 +35,12 @@ function fillDemo(demoEmail) {
   <div class="login-page">
     <div class="login-card card">
       <div class="login-brand">
-        <span class="swiss-cross">+</span>
+        <BrandLogo :size="48" />
         <div>
-          <h1>lehrjahre.ch</h1>
+          <h1>
+            lehrjahre.ch
+            <span class="badge badge-warning" title="Frühe Prototyp-Version">Alpha</span>
+          </h1>
           <p class="text-muted">Digitale Lerndokumentation für MEM-Berufslehren in der Schweiz</p>
         </div>
       </div>
@@ -81,21 +85,21 @@ function fillDemo(demoEmail) {
           <button
             type="button"
             class="btn btn-sm"
-            @click="fillDemo('thomas.keller@swissmem-technik.ch')"
+            @click="fillDemo('thomas.keller@vektorwerk.ch')"
           >
             Ausbildner (Berufsbildner)
           </button>
           <button
             type="button"
             class="btn btn-sm"
-            @click="fillDemo('sandra.meier@swissmem-technik.ch')"
+            @click="fillDemo('sandra.meier@vektorwerk.ch')"
           >
             Ausbildnerin (HR)
           </button>
           <button
             type="button"
             class="btn btn-sm"
-            @click="fillDemo('lukas.frei@swissmem-technik.ch')"
+            @click="fillDemo('lukas.frei@vektorwerk.ch')"
           >
             Lernender (Polymechaniker EFZ)
           </button>
@@ -129,26 +133,15 @@ function fillDemo(demoEmail) {
 }
 
 .login-brand h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
   font-size: 1.4rem;
 }
 
 .login-brand p {
   margin: 2px 0 0 0;
-}
-
-.swiss-cross {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 42px;
-  height: 42px;
-  background: var(--color-primary);
-  color: #ffffff;
-  font-weight: 800;
-  font-size: 1.6rem;
-  border-radius: var(--radius-sm);
-  flex-shrink: 0;
 }
 
 .demo-box {

@@ -1,30 +1,46 @@
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
-from backend.models import db, Knowledge, Documents, User
+from backend.models import db, Knowledge, Documents, User, UserRelation
 from backend.auth import login_required, get_current_user
 from backend.storage import save_text_document, read_text_document, delete_stored_file
 
 bp = Blueprint("api_knowledge", __name__, url_prefix="/api/knowledge")
 
 
+def visible_owner_ids(actor):
+    """Return the user IDs whose knowledge entries the actor may read."""
+    if actor.role == "lernender":
+        return {actor.id}
+    if actor.job_title in {"Administrator", "HR / Rekrutierung"}:
+        return {u.id for u in User.query.filter_by(company=actor.company).all()}
+    student_ids = {
+        relation.student
+        for relation in UserRelation.query.filter_by(supervisor=actor.id).all()
+    }
+    return {actor.id} | student_ids
+
+
+def can_view_node(actor, node):
+    return bool(node.document) and node.document.owner in visible_owner_ids(actor)
+
+
+def can_edit_node(actor, node):
+    return bool(node.document) and node.document.owner == actor.id
+
+
 @bp.route("", methods=["GET"])
 @login_required
 def list_knowledge():
     actor = get_current_user()
-    company_user_ids = [
-        u.id for u in User.query.filter_by(company=actor.company).all()
-    ]
+    owner_ids = visible_owner_ids(actor)
 
     nodes = Knowledge.query.order_by(Knowledge.id.desc()).all()
     result = []
     for node in nodes:
-        if node.document and node.document.owner not in company_user_ids:
+        if not node.document or node.document.owner not in owner_ids:
             continue
         item = node.to_dict()
-        if node.document:
-            item["content"] = read_text_document(node.document.path)
-        else:
-            item["content"] = ""
+        item["content"] = read_text_document(node.document.path)
         result.append(item)
 
     return jsonify({"data": result})
@@ -33,8 +49,9 @@ def list_knowledge():
 @bp.route("/<int:node_id>", methods=["GET"])
 @login_required
 def get_knowledge_node(node_id):
+    actor = get_current_user()
     node = db.session.get(Knowledge, node_id)
-    if not node:
+    if not node or not can_view_node(actor, node):
         return jsonify({"error": "Wissenseintrag nicht gefunden."}), 404
 
     item = node.to_dict()
@@ -57,6 +74,8 @@ def create_knowledge_node():
         parent = db.session.get(Knowledge, int(parent_id))
         if not parent:
             return jsonify({"error": "Übergeordnetes Thema nicht gefunden."}), 400
+        if not can_edit_node(actor, parent):
+            return jsonify({"error": "Übergeordnetes Thema gehört nicht Ihnen."}), 403
         parent_id = parent.id
     else:
         parent_id = None
@@ -100,8 +119,10 @@ def create_knowledge_node():
 def update_knowledge_node(node_id):
     actor = get_current_user()
     node = db.session.get(Knowledge, node_id)
-    if not node:
+    if not node or not can_view_node(actor, node):
         return jsonify({"error": "Wissenseintrag nicht gefunden."}), 404
+    if not can_edit_node(actor, node):
+        return jsonify({"error": "Keine Berechtigung."}), 403
 
     data = request.get_json(silent=True) or {}
     if "title" in data and data["title"].strip():
@@ -111,7 +132,12 @@ def update_knowledge_node(node_id):
     if "parent_id" in data:
         pid = data.get("parent_id")
         if pid and int(pid) != node.id:
-            node.parent_id = int(pid)
+            parent = db.session.get(Knowledge, int(pid))
+            if not parent:
+                return jsonify({"error": "Übergeordnetes Thema nicht gefunden."}), 400
+            if not can_edit_node(actor, parent):
+                return jsonify({"error": "Übergeordnetes Thema gehört nicht Ihnen."}), 403
+            node.parent_id = parent.id
         else:
             node.parent_id = None
 
@@ -160,9 +186,12 @@ def update_knowledge_node(node_id):
 @bp.route("/<int:node_id>", methods=["DELETE"])
 @login_required
 def delete_knowledge_node(node_id):
+    actor = get_current_user()
     node = db.session.get(Knowledge, node_id)
-    if not node:
+    if not node or not can_view_node(actor, node):
         return jsonify({"error": "Wissenseintrag nicht gefunden."}), 404
+    if not can_edit_node(actor, node):
+        return jsonify({"error": "Keine Berechtigung."}), 403
 
     # Delete child nodes first
     children = Knowledge.query.filter_by(parent_id=node.id).all()

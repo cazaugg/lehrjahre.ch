@@ -8,6 +8,25 @@ import sqlite3
 db = SQLAlchemy()
 
 
+def semester_for_date(exam_date, start_date, end_date):
+    """Return the 1-based semester of an exam, counted forward to end_date."""
+    if not exam_date or not start_date or not end_date or start_date >= end_date:
+        return None
+    if exam_date > end_date:
+        return None
+
+    def months_between(first, second):
+        return (
+            (second.year - first.year) * 12
+            + (second.month - first.month)
+            + (second.day - first.day) / 30.4375
+        )
+
+    total = max(1, round(months_between(start_date, end_date) / 6))
+    offset = int(months_between(exam_date, end_date) // 6)
+    return max(1, min(total, total - offset))
+
+
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     if isinstance(dbapi_connection, sqlite3.Connection):
@@ -273,6 +292,15 @@ class Grades(db.Model):
             "grade": round(float(self.grade), 2),
             "title": self.title,
             "comment": self.comment or "",
+            "semester": (
+                semester_for_date(
+                    self.date,
+                    self.student_user.start_date,
+                    self.student_user.end_date,
+                )
+                if self.student_user
+                else None
+            ),
         }
 
 
@@ -306,7 +334,6 @@ class Documents(db.Model):
             "name": self.name,
             "description": self.description or "",
             "filename": self.filename,
-            "path": self.path,
             "type": self.type,
             "owner": self.owner,
             "owner_name": (
@@ -344,11 +371,26 @@ class Knowledge(db.Model):
     document = db.relationship("Documents", foreign_keys=[document_id], lazy="joined")
 
     def to_dict(self):
+        doc = self.document
+        owner_name = (
+            f"{doc.owner_user.name} {doc.owner_user.surname}"
+            if doc and doc.owner_user
+            else ""
+        )
+        author_name = (
+            f"{doc.author_user.name} {doc.author_user.surname}"
+            if doc and doc.author_user
+            else ""
+        )
         return {
             "id": self.id,
             "parent_id": self.parent_id,
             "title": self.title,
             "description": self.description or "",
             "document_id": self.document_id,
-            "document": self.document.to_dict() if self.document else None,
+            "document": doc.to_dict() if doc else None,
+            "owner": doc.owner if doc else None,
+            "owner_name": owner_name,
+            "author": doc.author if doc else None,
+            "author_name": author_name,
         }

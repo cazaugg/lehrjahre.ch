@@ -1,8 +1,9 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, provide } from 'vue'
 import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import ModalDialog from '../components/ui/ModalDialog.vue'
+import ProjectCard from '../components/project/ProjectCard.vue'
 
 const auth = useAuthStore()
 
@@ -39,20 +40,13 @@ const implIsDone = ref(false)
 // Evaluation Modal
 const showEvalModal = ref(false)
 const editingEval = ref(null)
+const evalModalFocus = ref('planning') // 'planning' | 'eval'
 const evalProjectId = ref(null)
 const evalStudentId = ref('')
 const evalGoal = ref('')
 const evalParticipation = ref('')
 const evalPlanningText = ref('')
 const evalText = ref('')
-
-const projectTitleMap = computed(() => {
-  const m = {}
-  for (const p of projects.value) {
-    m[p.id] = p.title
-  }
-  return m
-})
 
 const rootProjects = computed(() =>
   projects.value.filter((p) => !p.parent_project)
@@ -76,32 +70,78 @@ function evaluationsFor(projectId) {
 
 const filteredProjects = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
-  return projects.value.filter((p) => {
-    const impls = implementationsFor(p.id)
-    const evals = evaluationsFor(p.id)
-
-    if (filterStatus.value === 'done') {
-      if (impls.length === 0 || !impls.every((i) => i.is_done)) return false
-    } else if (filterStatus.value === 'open') {
-      if (impls.length > 0 && impls.every((i) => i.is_done)) return false
-    }
-
-    if (q) {
-      const goalsStr = (p.goals || []).join(' ')
-      const implStr = impls.map((i) => `${i.title} ${i.text} ${i.student_name}`).join(' ')
-      const evalStr = evals
-        .map((e) => `${e.goal} ${e.planning_text} ${e.eval_text} ${e.student_name}`)
-        .join(' ')
-      const hay =
-        `${p.title} ${p.description || ''} ${p.author_name || ''} ${goalsStr} ${implStr} ${evalStr}`.toLowerCase()
-      if (!hay.includes(q)) return false
-    }
+  return rootProjects.value.filter((p) => {
+    if (!treeStatusMatches(p.id)) return false
+    if (q && !treeMatchesSearch(p, q)) return false
     return true
   })
 })
 
-function toggleExpand(projectId) {
-  expandedIds.value[projectId] = !expandedIds.value[projectId]
+function childrenOf(projectId) {
+  return projects.value.filter((p) => p.parent_project === projectId)
+}
+
+function descendantProjects(projectId) {
+  const result = []
+  const stack = [...childrenOf(projectId)]
+  while (stack.length) {
+    const p = stack.pop()
+    result.push(p)
+    stack.push(...childrenOf(p.id))
+  }
+  return result
+}
+
+function projectMatchesSearch(project, q) {
+  const impls = implementationsFor(project.id)
+  const evals = evaluationsFor(project.id)
+  const goalsStr = (project.goals || []).join(' ')
+  const implStr = impls.map((i) => `${i.title} ${i.text} ${i.student_name}`).join(' ')
+  const evalStr = evals
+    .map((e) => `${e.goal} ${e.planning_text} ${e.eval_text} ${e.student_name}`)
+    .join(' ')
+  const hay =
+    `${project.title} ${project.description || ''} ${project.author_name || ''} ${goalsStr} ${implStr} ${evalStr}`.toLowerCase()
+  return hay.includes(q)
+}
+
+function treeMatchesSearch(project, q) {
+  if (projectMatchesSearch(project, q)) return true
+  return descendantProjects(project.id).some((p) => projectMatchesSearch(p, q))
+}
+
+function treeHasSearchDescendantMatch(project, q) {
+  if (!q) return false
+  return descendantProjects(project.id).some((p) => projectMatchesSearch(p, q))
+}
+
+function implementationsForTree(projectId) {
+  const ids = new Set([
+    projectId,
+    ...descendantProjects(projectId).map((p) => p.id)
+  ])
+  return implementations.value.filter((i) => {
+    if (!ids.has(i.project)) return false
+    if (filterStudent.value && i.student !== Number(filterStudent.value)) return false
+    return true
+  })
+}
+
+function treeStatusMatches(projectId) {
+  if (!filterStatus.value) return true
+  const impls = implementationsForTree(projectId)
+  const allDone = impls.length > 0 && impls.every((i) => i.is_done)
+  return filterStatus.value === 'done' ? allDone : !allDone
+}
+
+function isExpanded(project) {
+  if (expandedIds.value[project.id]) return true
+  const q = searchQuery.value.trim().toLowerCase()
+  return treeHasSearchDescendantMatch(project, q)
+}
+
+function toggleExpand(project) {
+  expandedIds.value[project.id] = !isExpanded(project)
 }
 
 async function loadAll() {
@@ -262,8 +302,9 @@ async function deleteImpl(item) {
 }
 
 // Evaluation (Ziele & Bewertung) CRUD
-function openNewEval(proj, prefillGoal = '') {
+function openNewEval(proj, prefillGoal = '', focus = 'planning') {
   editingEval.value = null
+  evalModalFocus.value = focus
   evalProjectId.value = proj.id
   evalStudentId.value = auth.isStudent
     ? auth.user?.id
@@ -275,8 +316,9 @@ function openNewEval(proj, prefillGoal = '') {
   showEvalModal.value = true
 }
 
-function openEditEval(ev) {
+function openEditEval(ev, focus = 'eval') {
   editingEval.value = ev
+  evalModalFocus.value = focus
   evalProjectId.value = ev.project
   evalStudentId.value = ev.student
   evalGoal.value = ev.goal
@@ -331,6 +373,26 @@ function formatDate(d) {
   if (!d) return '–'
   return new Date(d).toLocaleDateString('de-CH')
 }
+
+provide('projectCtx', {
+  auth,
+  childrenOf,
+  isExpanded,
+  toggleExpand,
+  implementationsFor,
+  evaluationsFor,
+  formatDate,
+  openNewProject,
+  openEditProject,
+  deleteProject,
+  openNewImpl,
+  openEditImpl,
+  toggleImplDone,
+  deleteImpl,
+  openNewEval,
+  openEditEval,
+  deleteEval
+})
 </script>
 
 <template>
@@ -386,249 +448,11 @@ function formatDate(d) {
     </div>
 
     <div v-else>
-      <div
+      <ProjectCard
         v-for="proj in filteredProjects"
         :key="proj.id"
-        class="collapsible-card"
-      >
-        <div class="collapsible-header" @click="toggleExpand(proj.id)">
-          <div class="flex-gap">
-            <span class="expand-indicator">{{ expandedIds[proj.id] ? '▾' : '▸' }}</span>
-            <div>
-              <div class="flex-gap">
-                <strong style="font-size: 1rem">{{ proj.title }}</strong>
-                <span v-if="proj.parent_project" class="badge badge-info">
-                  Teilprojekt von: {{ projectTitleMap[proj.parent_project] || '#' + proj.parent_project }}
-                </span>
-              </div>
-              <div class="text-muted" style="margin-top: 2px">
-                Zeitraum: {{ formatDate(proj.start_date) }} bis {{ formatDate(proj.due_date) }}
-                <span v-if="proj.author_name"> · Verantwortlich: {{ proj.author_name }}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex-gap">
-            <span class="badge badge-info">
-              {{ (proj.goals || []).length }} Ziele
-            </span>
-            <span class="badge badge-warning">
-              {{ implementationsFor(proj.id).length }} Berichte
-            </span>
-            <span class="badge badge-success">
-              {{ evaluationsFor(proj.id).length }} Bewertungen
-            </span>
-          </div>
-        </div>
-
-        <!-- Expanded Project Content -->
-        <div v-if="expandedIds[proj.id]" class="collapsible-body">
-          <div class="flex-between" style="margin-bottom: var(--space-3)">
-            <p style="white-space: pre-line; margin: 0">
-              {{ proj.description || 'Keine Beschreibung hinterlegt.' }}
-            </p>
-            <div v-if="auth.isTrainer" class="flex-gap">
-              <button
-                type="button"
-                class="btn btn-sm"
-                @click="openNewProject(proj.id)"
-              >
-                + Teilprojekt
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm"
-                @click="openEditProject(proj)"
-              >
-                Bearbeiten
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-danger"
-                @click="deleteProject(proj)"
-              >
-                Löschen
-              </button>
-            </div>
-          </div>
-
-          <!-- Learning Goals (Ziele) -->
-          <div class="section-block">
-            <h4>Lernziele (Ziele)</h4>
-            <div v-if="!proj.goals || proj.goals.length === 0" class="text-muted">
-              Keine spezifischen Lernziele definiert.
-            </div>
-            <ul v-else class="goal-list">
-              <li v-for="(g, idx) in proj.goals" :key="idx" class="goal-item">
-                <span>{{ g }}</span>
-                <button
-                  type="button"
-                  class="btn btn-sm"
-                  @click="openNewEval(proj, g)"
-                >
-                  Ziel planen / bewerten
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          <!-- Tasks & Reports (Aufgaben & Berichte) -->
-          <div class="section-block">
-            <div class="flex-between" style="margin-bottom: var(--space-3)">
-              <div>
-                <h4 style="margin: 0">Aufgaben & Arbeitsberichte</h4>
-                <span class="text-muted">Dokumentation der praktischen Umsetzung</span>
-              </div>
-              <button
-                type="button"
-                class="btn btn-primary btn-sm"
-                @click="openNewImpl(proj)"
-              >
-                + Aufgabe / Bericht erfassen
-              </button>
-            </div>
-
-            <div v-if="implementationsFor(proj.id).length === 0" class="text-muted">
-              Noch keine Aufgaben oder Arbeitsberichte erfasst.
-            </div>
-
-            <div v-else>
-              <div
-                v-for="item in implementationsFor(proj.id)"
-                :key="item.id"
-                class="sub-card"
-              >
-                <div class="flex-between">
-                  <div class="flex-gap">
-                    <strong>{{ item.title }}</strong>
-                    <span class="badge badge-info">{{ item.student_name }}</span>
-                    <span
-                      class="badge"
-                      :class="item.is_done ? 'badge-success' : 'badge-warning'"
-                    >
-                      {{ item.is_done ? 'Erledigt' : 'Offen' }}
-                    </span>
-                  </div>
-                  <div class="flex-gap">
-                    <button
-                      type="button"
-                      class="btn btn-sm"
-                      @click="toggleImplDone(item)"
-                    >
-                      {{ item.is_done ? 'Wieder öffnen' : 'Als erledigt markieren' }}
-                    </button>
-                    <button
-                      type="button"
-                      class="btn btn-sm"
-                      @click="openEditImpl(item)"
-                    >
-                      Bearbeiten
-                    </button>
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-danger"
-                      @click="deleteImpl(item)"
-                    >
-                      Löschen
-                    </button>
-                  </div>
-                </div>
-                <p style="margin-top: var(--space-2); white-space: pre-line">
-                  {{ item.text }}
-                </p>
-                <div class="text-muted">
-                  Lernende/r: {{ item.student_name }}
-                  <span v-if="item.supervisor_name">
-                    · Betreuer/in: {{ item.supervisor_name }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Evaluations (Zielplanung & Bewertung) -->
-          <div class="section-block">
-            <div class="flex-between" style="margin-bottom: var(--space-3)">
-              <div>
-                <h4 style="margin: 0">Zielplanung & Bewertung</h4>
-                <span class="text-muted">
-                  Selbstplanung Lernende/r und Beurteilung durch Ausbildner/in
-                </span>
-              </div>
-              <button
-                type="button"
-                class="btn btn-primary btn-sm"
-                @click="openNewEval(proj, '')"
-              >
-                + Neue Bewertung erfassen
-              </button>
-            </div>
-
-            <div v-if="evaluationsFor(proj.id).length === 0" class="text-muted">
-              Noch keine Zielbewertungen vorhanden.
-            </div>
-
-            <div v-else>
-              <div
-                v-for="ev in evaluationsFor(proj.id)"
-                :key="ev.id"
-                class="sub-card"
-              >
-                <div class="flex-between">
-                  <div class="flex-gap">
-                    <strong>Lernziel: {{ ev.goal }}</strong>
-                    <span class="badge badge-info">{{ ev.student_name }}</span>
-                    <span
-                      class="badge"
-                      :class="ev.eval_text ? 'badge-success' : 'badge-warning'"
-                    >
-                      {{ ev.eval_text ? 'Bewertet' : 'In Planung' }}
-                    </span>
-                  </div>
-                  <div class="flex-gap">
-                    <button
-                      type="button"
-                      class="btn btn-sm"
-                      @click="openEditEval(ev)"
-                    >
-                      {{ auth.isTrainer ? 'Bewerten / Bearbeiten' : 'Planung bearbeiten' }}
-                    </button>
-                    <button
-                      v-if="auth.isTrainer || !ev.eval_text"
-                      type="button"
-                      class="btn btn-sm btn-danger"
-                      @click="deleteEval(ev)"
-                    >
-                      Löschen
-                    </button>
-                  </div>
-                </div>
-
-                <div class="grid-2" style="margin-top: var(--space-3)">
-                  <div class="eval-box">
-                    <div class="form-label">Planung / Vorgehen (Lernende/r)</div>
-                    <p style="white-space: pre-line; margin: 0">
-                      {{ ev.planning_text || 'Noch keine Planung eingetragen.' }}
-                    </p>
-                  </div>
-                  <div class="eval-box" :class="{ evaluated: !!ev.eval_text }">
-                    <div class="form-label">Beurteilung / Feedback (Ausbildner/in)</div>
-                    <p style="white-space: pre-line; margin: 0">
-                      {{ ev.eval_text || 'Ausstehend.' }}
-                    </p>
-                  </div>
-                </div>
-                <div class="text-muted" style="margin-top: var(--space-2)">
-                  Lernende/r: {{ ev.student_name }}
-                  <span v-if="ev.supervisor_name">
-                    · Ausbildner/in: {{ ev.supervisor_name }}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+        :project="proj"
+      />
     </div>
 
     <!-- Modal: Project Create/Edit -->
@@ -740,10 +564,14 @@ function formatDate(d) {
       </form>
     </ModalDialog>
 
-    <!-- Modal: Evaluation (Zielplanung & Bewertung) -->
+    <!-- Modal: Evaluation (Phase 1 Zielplanung & Phase 3 Bewertung durch Berufsbildner/in) -->
     <ModalDialog
       :show="showEvalModal"
-      :title="editingEval ? 'Zielplanung & Bewertung bearbeiten' : 'Lernziel planen / bewerten'"
+      :title="
+        evalModalFocus === 'planning'
+          ? 'Phase 1: Zielplanung & Vorgaben (Berufsbildner/in)'
+          : 'Phase 3: Kompetenzbewertung (Berufsbildner/in)'
+      "
       @close="showEvalModal = false"
     >
       <form @submit.prevent="saveEval">
@@ -762,7 +590,7 @@ function formatDate(d) {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Zugehöriger Arbeitsbericht (optional)</label>
+          <label class="form-label">Zugehöriger Arbeitsbericht aus Phase 2 (optional)</label>
           <select v-model="evalParticipation" class="form-control">
             <option value="">Kein spezifischer Arbeitsbericht</option>
             <option
@@ -776,22 +604,26 @@ function formatDate(d) {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Arbeitsplanung / Massnahmen (Lernende/r)</label>
+          <label class="form-label">
+            Phase 1: Planungsvorgabe / Erwartung (Berufsbildner/in)
+          </label>
           <textarea
             v-model="evalPlanningText"
             class="form-control"
             rows="4"
-            placeholder="Wie gehe ich vor, um dieses Ziel zu erreichen?"
+            placeholder="Vorgaben, Hilfsmittel und Qualitätskriterien des Berufsbildners für dieses Lernziel..."
           />
         </div>
 
-        <div v-if="auth.isTrainer" class="form-group">
-          <label class="form-label">Beurteilung & Kompetenznachweis (Ausbildner/in)</label>
+        <div class="form-group">
+          <label class="form-label">
+            Phase 3: Beurteilung & Kompetenznachweis (Berufsbildner/in)
+          </label>
           <textarea
             v-model="evalText"
             class="form-control"
             rows="4"
-            placeholder="Beurteilung der Arbeitsqualität, Selbstständigkeit und Zielerreichung..."
+            placeholder="Beurteilung der Arbeitsqualität, Selbstständigkeit und Zielerreichung nach der Ausführung..."
           />
         </div>
 
@@ -805,51 +637,3 @@ function formatDate(d) {
     </ModalDialog>
   </div>
 </template>
-
-<style scoped>
-.section-block {
-  margin-top: var(--space-4);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
-}
-
-.goal-list {
-  list-style: none;
-  padding: 0;
-  margin: var(--space-2) 0 0 0;
-}
-
-.goal-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 0.55rem 0.75rem;
-  background: var(--color-surface-muted);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  margin-bottom: 0.4rem;
-  font-size: 0.9rem;
-}
-
-.sub-card {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-4);
-  margin-bottom: var(--space-3);
-  background: var(--color-surface);
-}
-
-.eval-box {
-  background: var(--color-surface-muted);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  font-size: 0.88rem;
-}
-
-.eval-box.evaluated {
-  background: #f0fdf4;
-  border-color: #bbf7d0;
-}
-</style>

@@ -6,7 +6,8 @@ import ModalDialog from './ModalDialog.vue'
 import MarkdownEditor from './MarkdownEditor.vue'
 
 const props = defineProps({
-  documentType: { type: String, required: true },
+  documentType: { type: String, default: '' },
+  documentTypes: { type: Array, default: null },
   title: { type: String, required: true },
   subtitle: { type: String, default: '' },
   ownerId: { type: Number, default: null },
@@ -19,9 +20,35 @@ const documents = ref([])
 const loading = ref(false)
 const error = ref('')
 
+const documentTypeLabels = {
+  zeugnis: 'Zeugnis',
+  kursnachweis: 'Kursnachweis',
+  ausbildungsgespraech: 'Ausbildungsgespräch',
+  lernjournal: 'Lernjournal',
+  wissen: 'Wissen',
+  vertrag: 'Vertrag',
+  bewerbung: 'Bewerbung',
+  profilbild: 'Profilbild',
+  sonstiges: 'Sonstiges'
+}
+
+const types = computed(() => {
+  if (props.documentTypes && props.documentTypes.length > 0) {
+    return props.documentTypes
+  }
+  return props.documentType ? [props.documentType] : []
+})
+
+const hasMultipleTypes = computed(() => types.value.length > 1)
+
+function typeLabel(type) {
+  return documentTypeLabels[type] || type
+}
+
 // Filter & Search state
 const searchQuery = ref('')
 const filterStudent = ref('')
+const filterType = ref('')
 const filterStatus = ref('')
 const expandedIds = ref({})
 
@@ -34,6 +61,7 @@ const formName = ref('')
 const formDescription = ref('')
 const formContent = ref('')
 const formOwner = ref('')
+const formType = ref('')
 const formIsDone = ref(false)
 const formIsTemplate = ref(false)
 const selectedFile = ref(null)
@@ -47,6 +75,7 @@ const filteredDocs = computed(() => {
     .filter((d) => {
       if (props.ownerId && d.owner !== props.ownerId) return false
       if (filterStudent.value && d.owner !== Number(filterStudent.value)) return false
+      if (filterType.value && d.type !== filterType.value) return false
       if (filterStatus.value === 'done' && !d.is_done) return false
       if (filterStatus.value === 'open' && d.is_done) return false
       if (q) {
@@ -65,14 +94,25 @@ async function loadDocuments() {
   loading.value = true
   error.value = ''
   try {
-    const params = new URLSearchParams({
-      type: props.documentType,
-      include_content: 'true'
-    })
-    if (props.ownerId) {
-      params.set('owner', String(props.ownerId))
-    }
-    documents.value = await apiFetch(`/api/documents?${params.toString()}`)
+    const results = await Promise.all(
+      types.value.map(async (type) => {
+        const params = new URLSearchParams({
+          type,
+          include_content: 'true'
+        })
+        if (props.ownerId) {
+          params.set('owner', String(props.ownerId))
+        }
+        return apiFetch(`/api/documents?${params.toString()}`)
+      })
+    )
+    documents.value = results
+      .flat()
+      .sort((a, b) => {
+        const diff =
+          new Date(b.updated_date || 0) - new Date(a.updated_date || 0)
+        return diff !== 0 ? diff : b.id - a.id
+      })
   } catch (e) {
     error.value = e.message
   } finally {
@@ -80,7 +120,7 @@ async function loadDocuments() {
   }
 }
 
-watch(() => [props.documentType, props.ownerId], loadDocuments)
+watch(() => [types.value.join(','), props.ownerId], loadDocuments)
 onMounted(loadDocuments)
 
 function openCreate(initialMode = null, fromTemplate = null) {
@@ -91,12 +131,14 @@ function openCreate(initialMode = null, fromTemplate = null) {
     (auth.isStudent
       ? auth.user?.id
       : filterStudent.value || auth.companyStudents[0]?.id || auth.user?.id)
+  formType.value = filterType.value || types.value[0] || ''
 
   if (fromTemplate) {
     mode.value = 'text'
     formName.value = fromTemplate.name.replace(/^Vorlage:?\s*/i, '')
     formDescription.value = fromTemplate.description || ''
     formContent.value = fromTemplate.content || ''
+    formType.value = fromTemplate.type || formType.value
   } else {
     formName.value = ''
     formDescription.value = ''
@@ -115,6 +157,7 @@ function openEdit(doc) {
   formDescription.value = doc.description || ''
   formContent.value = doc.content || ''
   formOwner.value = doc.owner
+  formType.value = doc.type || ''
   formIsDone.value = doc.is_done
   formIsTemplate.value = doc.is_template
   selectedFile.value = null
@@ -153,7 +196,7 @@ async function saveDocument() {
       fd.append('file', selectedFile.value)
       fd.append('name', formName.value || selectedFile.value.name)
       fd.append('description', formDescription.value)
-      fd.append('type', props.documentType)
+      fd.append('type', formType.value)
       fd.append('owner', String(ownerToSave))
       fd.append('is_done', String(formIsDone.value))
       fd.append('is_template', String(formIsTemplate.value))
@@ -170,7 +213,7 @@ async function saveDocument() {
           name: formName.value,
           description: formDescription.value,
           content: formContent.value,
-          type: props.documentType,
+          type: formType.value,
           owner: ownerToSave,
           is_done: formIsDone.value,
           is_template: formIsTemplate.value
@@ -255,6 +298,9 @@ function formatDate(iso) {
       <div class="flex-gap" style="margin-top: var(--space-2)">
         <div v-for="tpl in templates" :key="tpl.id" class="template-pill">
           <span>{{ tpl.name }}</span>
+          <span v-if="hasMultipleTypes" class="badge badge-type">
+            {{ typeLabel(tpl.type) }}
+          </span>
           <button
             type="button"
             class="btn btn-sm btn-primary"
@@ -294,6 +340,17 @@ function formatDate(iso) {
         </option>
       </select>
 
+      <select
+        v-if="hasMultipleTypes"
+        v-model="filterType"
+        class="form-control filter-select"
+      >
+        <option value="">Alle Typen</option>
+        <option v-for="type in types" :key="type" :value="type">
+          {{ typeLabel(type) }}
+        </option>
+      </select>
+
       <select v-model="filterStatus" class="form-control filter-select">
         <option value="">Alle Status</option>
         <option value="open">In Bearbeitung</option>
@@ -316,6 +373,9 @@ function formatDate(iso) {
             <div>
               <div class="flex-gap">
                 <strong>{{ doc.name }}</strong>
+                <span v-if="hasMultipleTypes" class="badge badge-type">
+                  {{ typeLabel(doc.type) }}
+                </span>
                 <span v-if="doc.owner_name" class="badge badge-info">
                   {{ doc.owner_name }}
                 </span>
@@ -344,11 +404,10 @@ function formatDate(iso) {
 
         <div v-if="expandedIds[doc.id]" class="collapsible-body">
           <div class="flex-between" style="margin-bottom: var(--space-3)">
-            <div class="text-muted">
-              Dateipfad: <code>/data/documents/{{ doc.path }}</code>
-              <span v-if="doc.author_name"> · Erstellt von {{ doc.author_name }}</span>
+            <div class="text-muted" v-if="doc.author_name">
+              Erstellt von {{ doc.author_name }}
             </div>
-            <div class="flex-gap">
+            <div class="flex-gap" style="margin-left: auto">
               <button type="button" class="btn btn-sm" @click="toggleDone(doc)">
                 {{ doc.is_done ? 'Als offen markieren' : 'Abschliessen' }}
               </button>
@@ -400,6 +459,18 @@ function formatDate(iso) {
           >
             Text / Protokoll schreiben
           </button>
+        </div>
+
+        <div
+          v-if="!editingDoc && hasMultipleTypes"
+          class="form-group"
+        >
+          <label class="form-label">Dokumenttyp *</label>
+          <select v-model="formType" class="form-control" required>
+            <option v-for="type in types" :key="type" :value="type">
+              {{ typeLabel(type) }}
+            </option>
+          </select>
         </div>
 
         <div
@@ -462,6 +533,11 @@ function formatDate(iso) {
 </template>
 
 <style scoped>
+.badge-type {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
 .template-pill {
   display: inline-flex;
   align-items: center;

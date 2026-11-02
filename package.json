@@ -1,0 +1,12 @@
+{
+  "name": "lehrjahre",
+  "private": true,
+  "description": "Local development entry point for lehrjahre.ch",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "setup": "node scripts/dev.mjs setup"
+  }
+}

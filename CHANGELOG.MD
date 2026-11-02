@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Tooling:** Upgraded to Node.js 26 LTS and Python 3.14; refreshed frontend dependencies (Vite 8, Vue Router 5, Pinia 4) and backend dependencies (Flask 3.1, Werkzeug 3.1, argon2-cffi 25, pytest 9).
+- **Tooling:** Switched backend environment and dependency management to uv (`pyproject.toml` + `uv.lock`); removed `backend/requirements.txt`.
+- **Tooling:** Added root `npm run dev` to start Flask and Vite together, with free-port detection and automatic dependency bootstrap.
+- **Frontend:** Added an "Alpha" badge to the login and sidebar branding to mark the build as an early prototype.
+- **Seed data:** Expanded the knowledge base to 4 subjects with 20 pages (Fertigung & Automatisierung, Arbeitssicherheit, Werkstoffkunde, Zeichnen/Messtechnik).
+- **Frontend:** Wissen view now groups pages under their subject instead of listing all entries flat; removed the redundant topic overview block (header already shows title and description).
+- **Frontend:** Replaced the Markdown textarea with `md-editor-v3` (lazy-loaded, German toolbar labels, no external CDN assets). Read-only rendering still uses the existing markdown-it/KaTeX pipeline.
+
 ## 0.1.0 - Initial Implementation
 
 - **Backend (Flask & SQLite):**

@@ -21,37 +21,74 @@ Digitale Lerndokumentation für MEM Berufslehren in der Schweiz.
 
 ## Quickstart
 
-### 1. Backend Setup & Seed
+Requires [uv](https://docs.astral.sh/uv/), Node.js >= 26 with npm, and Python >= 3.14. `uv` installs the version pinned in `.python-version`.
+
+### 1. Development
+
+From the repository root:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r backend/requirements.txt
-.venv/bin/python -m backend.seed
-.venv/bin/python -m backend.app
+npm run dev
+```
+
+Starts Flask and Vite together, installs missing dependencies, and prints both URLs. Ports 5000/5173 are used when free; otherwise the next free port is picked and wired into both processes.
+
+Seed demo data once (skipped if the database already has users):
+
+```bash
+uv run python -m backend.seed
 ```
 
 **Demo Accounts (Password: `Lehrjahre2026!`):**
-- **Berufsbildner:** `thomas.keller@swissmem-technik.ch`
-- **HR / Rekrutierung:** `sandra.meier@swissmem-technik.ch`
-- **Lernender (Polymechaniker EFZ):** `lukas.frei@swissmem-technik.ch`
+- **Berufsbildner:** `thomas.keller@vektorwerk.ch`
+- **HR / Rekrutierung:** `sandra.meier@vektorwerk.ch`
+- **Lernender (Polymechaniker EFZ):** `lukas.frei@vektorwerk.ch`
 
-### 2. Frontend Development & Production Build
+### 2. Manual Backend & Frontend
+
+```bash
+uv sync
+uv run python -m backend.seed
+uv run python -m backend.app    # API on http://127.0.0.1:5000
+```
 
 ```bash
 cd frontend
-npm install
-npm run dev     # Vite dev server on http://127.0.0.1:5173 (proxies /api to :5000)
-npm run build   # Builds static assets into frontend/dist (served directly by Flask)
+npm ci
+npm run dev                     # Vite on http://127.0.0.1:5173, proxies /api to :5000
 ```
 
-### 3. Run Tests
+### 3. Production Build
 
 ```bash
-.venv/bin/pytest backend/test_api.py
+cd frontend
+npm run build                   # Builds static assets into frontend/dist
+```
+
+### 4. Run Tests
+
+```bash
+uv run pytest backend/test_api.py
+```
+
+### 5. Production Deployment
+
+Flask only serves the API under `/api`. The reverse proxy serves the built frontend and falls back to `index.html` for client-side routes:
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:5000;
+}
+
+location / {
+    root /path/to/frontend/dist;
+    try_files $uri $uri/ /index.html;
+}
 ```
 
 ## API Endpoints
 
+- `/api/health` (Service status)
 - `/api/auth` (`POST /login`, `POST /logout`, `GET /me`)
 - `/api/user` (Users & `user_relation` management)
 - `/api/project` (Hierarchical projects, topics, internships & learning goals)

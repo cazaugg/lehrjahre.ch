@@ -43,6 +43,10 @@ def list_evaluations():
 @login_required
 def create_evaluation():
     actor = get_current_user()
+    if actor.role != "ausbildner":
+        return jsonify(
+            {"error": "Planung und Bewertung werden durch Ausbildner/innen erfasst."}
+        ), 403
     data = request.get_json(silent=True) or {}
 
     project_id = data.get("project")
@@ -90,6 +94,10 @@ def update_evaluation(eval_id):
 
     if not can_access_student(actor, evaluation.student):
         return jsonify({"error": "Keine Berechtigung."}), 403
+    if actor.role != "ausbildner":
+        return jsonify(
+            {"error": "Planung und Bewertung können nur von Ausbildner/innen bearbeitet werden."}
+        ), 403
 
     data = request.get_json(silent=True) or {}
     if "goal" in data and data["goal"].strip():

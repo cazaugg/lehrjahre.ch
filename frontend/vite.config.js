@@ -6,14 +6,15 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src')
+      '@': path.resolve(import.meta.dirname, './src')
     }
   },
   server: {
-    port: 5173,
+    port: Number(process.env.LEHRJAHRE_WEB_PORT) || 5173,
+    strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:5000',
+        target: `http://127.0.0.1:${process.env.LEHRJAHRE_API_PORT || 5000}`,
         changeOrigin: true
       }
     }

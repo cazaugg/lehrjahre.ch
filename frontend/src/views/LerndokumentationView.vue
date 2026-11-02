@@ -17,6 +17,7 @@ const error = ref('')
 const searchQuery = ref('')
 const filterStudent = ref('')
 const filterSubject = ref('')
+const filterSemester = ref('')
 const expandedGradeIds = ref({})
 
 // Grade Modal
@@ -55,11 +56,30 @@ const availableSubjects = computed(() => {
   return Array.from(s).sort()
 })
 
+const availableSemesters = computed(() => {
+  const s = new Set(
+    grades.value.map((g) => g.semester).filter((semester) => semester != null)
+  )
+  return Array.from(s).sort((a, b) => a - b)
+})
+
+const hasGradesWithoutSemester = computed(() =>
+  grades.value.some((g) => g.semester == null)
+)
+
 const filteredGrades = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   return grades.value.filter((g) => {
     if (filterStudent.value && g.student !== Number(filterStudent.value)) return false
     if (filterSubject.value && g.subject !== filterSubject.value) return false
+    if (filterSemester.value === 'none' && g.semester != null) return false
+    if (
+      filterSemester.value &&
+      filterSemester.value !== 'none' &&
+      g.semester !== Number(filterSemester.value)
+    ) {
+      return false
+    }
     if (q) {
       const hay = `${g.title} ${g.subject} ${g.student_name || ''} ${g.comment || ''}`.toLowerCase()
       if (!hay.includes(q)) return false
@@ -199,6 +219,14 @@ function formatDate(d) {
           </option>
         </select>
 
+        <select v-model="filterSemester" class="form-control filter-select">
+          <option value="">Alle Semester</option>
+          <option v-for="sem in availableSemesters" :key="sem" :value="sem">
+            Semester {{ sem }}
+          </option>
+          <option v-if="hasGradesWithoutSemester" value="none">Ohne Semester</option>
+        </select>
+
         <span class="badge badge-info">Ø {{ overallAverage }}</span>
         <span class="text-muted">{{ filteredGrades.length }} Prüfungen</span>
       </div>
@@ -222,6 +250,9 @@ function formatDate(d) {
                 <div class="flex-gap">
                   <strong>{{ g.title }}</strong>
                   <span class="badge badge-info">{{ g.subject }}</span>
+                  <span v-if="g.semester" class="badge badge-neutral">
+                    Semester {{ g.semester }}
+                  </span>
                   <span v-if="auth.isTrainer && g.student_name" class="badge badge-warning">
                     {{ g.student_name }}
                   </span>
@@ -269,12 +300,12 @@ function formatDate(d) {
       </div>
     </div>
 
-    <!-- Section 2: Zeugnisse -->
-    <div v-else-if="activeSection === 'zeugnisse'">
+    <!-- Section 2: Zeugnisse & Kursnachweise -->
+    <div v-else-if="activeSection === 'nachweise'">
       <DocumentManager
-        document-type="zeugnis"
-        title="Semesterzeugnisse & Standortbestimmungen"
-        subtitle="Offizielle Schulzeugnisse der Berufsfachschule und Berufsmaturitätsschule"
+        :document-types="['zeugnis', 'kursnachweis']"
+        title="Zeugnisse & Kursnachweise"
+        subtitle="Semesterzeugnisse, Standortbestimmungen sowie ÜK- und Kursbestätigungen"
       />
     </div>
 
@@ -285,19 +316,11 @@ function formatDate(d) {
         title="Ausbildungsgespräche & Probezeitgespräch"
         subtitle="Halbjährliche Bildungsberichte, Probezeitprotokolle und Zielvereinbarungen"
         :prefer-text-editor="true"
+        :allow-templates="false"
       />
     </div>
 
-    <!-- Section 4: Kursnachweise -->
-    <div v-else-if="activeSection === 'kursnachweise'">
-      <DocumentManager
-        document-type="kursnachweis"
-        title="Überbetriebliche Kurse (ÜK) & Kursnachweise"
-        subtitle="Bestätigungen, Zertifikate und Kompetenznachweise aus ÜK und internen Kursen"
-      />
-    </div>
-
-    <!-- Section 5: Lernjournal -->
+    <!-- Section 4: Lernjournal -->
     <div v-else-if="activeSection === 'lernjournal'">
       <DocumentManager
         document-type="lernjournal"

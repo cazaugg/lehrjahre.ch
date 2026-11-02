@@ -1,5 +1,5 @@
 import os
-from flask import Flask, send_from_directory, jsonify, request
+from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from backend.config import Config, DATA_DIR, DOCUMENTS_DIR
 from backend.models import db
@@ -15,10 +15,7 @@ from backend.routes.knowledge_routes import bp as knowledge_bp
 
 
 def create_app(config_overrides: dict | None = None) -> Flask:
-    frontend_dist = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
-    )
-    app = Flask(__name__, static_folder=frontend_dist, static_url_path="")
+    app = Flask(__name__, static_folder=None)
     app.config.from_object(Config)
     if config_overrides:
         app.config.update(config_overrides)
@@ -52,24 +49,15 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     def request_entity_too_large(error):
         return jsonify({"error": "Die hochgeladene Datei ist zu gross (Max. 20 MB)."}), 413
 
-    @app.route("/", defaults={"path": ""})
-    @app.route("/<path:path>")
-    def serve_frontend(path):
-        if path.startswith("api/"):
+    @app.route("/api/health")
+    def api_health():
+        return jsonify({"service": "lehrjahre.ch API", "status": "ok"})
+
+    @app.errorhandler(404)
+    def not_found(error):
+        if request.path.startswith("/api/"):
             return jsonify({"error": "Endpunkt nicht gefunden."}), 404
-        if os.path.isdir(frontend_dist):
-            full_path = os.path.join(frontend_dist, path)
-            if path and os.path.isfile(full_path):
-                return send_from_directory(frontend_dist, path)
-            index_file = os.path.join(frontend_dist, "index.html")
-            if os.path.isfile(index_file):
-                return send_from_directory(frontend_dist, "index.html")
-        return jsonify(
-            {
-                "service": "lehrjahre.ch API",
-                "status": "ok",
-            }
-        )
+        return jsonify({"error": "Nicht gefunden."}), 404
 
     with app.app_context():
         db.create_all()
@@ -79,4 +67,6 @@ def create_app(config_overrides: dict | None = None) -> Flask:
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    port = int(os.environ.get("LEHRJAHRE_PORT", "5000"))
+    debug = os.environ.get("LEHRJAHRE_DEBUG", "1").lower() not in {"0", "false", "no"}
+    app.run(host="127.0.0.1", port=port, debug=debug)

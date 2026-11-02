@@ -213,6 +213,12 @@ textarea.form-control {
   color: var(--color-danger);
 }
 
+.badge-neutral {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
 /* Reusable Tabs */
 .tabs {
   display: flex;
@@ -384,4 +390,26 @@ textarea.form-control {
 .text-muted {
   color: var(--color-text-muted);
   font-size: 0.85rem;
+}
+
+/* Read-only detail fields */
+.detail-item {
+  margin-bottom: var(--space-3);
+}
+
+.detail-item:last-child {
+  margin-bottom: 0;
+}
+
+.detail-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
+}
+
+.detail-value {
+  font-size: 0.9rem;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
 }

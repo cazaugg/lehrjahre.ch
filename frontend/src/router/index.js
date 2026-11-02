@@ -13,23 +13,23 @@ const routes = [
   { path: '/projekte', name: 'projekte', component: ProjekteView },
   { path: '/lerndokumentation', redirect: '/lerndokumentation/noten' },
   {
+    path: '/lerndokumentation/zeugnisse',
+    redirect: '/lerndokumentation/nachweise'
+  },
+  {
+    path: '/lerndokumentation/kursnachweise',
+    redirect: '/lerndokumentation/nachweise'
+  },
+  {
     path: '/lerndokumentation/:section',
     name: 'lerndokumentation',
     component: LerndokumentationView
   },
   { path: '/wissen', name: 'wissen', component: WissenView },
-  { path: '/personen', redirect: '/personen/vorgesetzte' },
-  {
-    path: '/personen/:section',
-    name: 'personen',
-    component: PersonenView
-  },
-  { path: '/account', redirect: '/account/kontakt' },
-  {
-    path: '/account/:section',
-    name: 'account',
-    component: AccountView
-  }
+  { path: '/personen', name: 'personen', component: PersonenView },
+  { path: '/personen/:section', redirect: '/personen' },
+  { path: '/account', name: 'account', component: AccountView },
+  { path: '/account/:section', redirect: '/account' }
 ]
 
 const router = createRouter({

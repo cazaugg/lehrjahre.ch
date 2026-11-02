@@ -1,5 +1,6 @@
 import os
 import tempfile
+from datetime import date
 import pytest
 from backend.app import create_app
 from backend.models import db, User, UserRelation
@@ -28,19 +29,21 @@ def client():
             role="ausbildner",
             name="Thomas",
             surname="Keller",
-            company="SwissMEM Technik AG",
+            company="Vektorwerk Technik AG",
             password_hash=hash_password("Passwort123!"),
-            company_email="trainer@swissmem.ch",
+            company_email="trainer@vektorwerk.ch",
             job_title="Berufsbildner",
         )
         student = User(
             role="lernender",
             name="Lukas",
             surname="Frei",
-            company="SwissMEM Technik AG",
+            company="Vektorwerk Technik AG",
             password_hash=hash_password("Passwort123!"),
-            company_email="student@swissmem.ch",
+            company_email="student@vektorwerk.ch",
             job_title="Polymechanikerin / Polymechaniker EFZ",
+            start_date=date(2024, 8, 12),
+            end_date=date(2028, 7, 31),
         )
         db.session.add_all([trainer, student])
         db.session.flush()
@@ -58,8 +61,18 @@ def login(client, email, password="Passwort123!"):
     return data["csrf_token"], data["user"]
 
 
+def test_health_and_api_only_routing(client):
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    assert res.get_json()["status"] == "ok"
+
+    # Frontend routes are handled by the reverse proxy, not Flask
+    res = client.get("/personen")
+    assert res.status_code == 404
+
+
 def test_auth_and_csrf_protection(client):
-    csrf, user = login(client, "trainer@swissmem.ch")
+    csrf, user = login(client, "trainer@vektorwerk.ch")
     assert user["role"] == "ausbildner"
 
     # Mutating request without CSRF header fails
@@ -79,7 +92,7 @@ def test_auth_and_csrf_protection(client):
 
 
 def test_documents_and_knowledge_company_folder(client):
-    csrf, trainer = login(client, "trainer@swissmem.ch")
+    csrf, trainer = login(client, "trainer@vektorwerk.ch")
 
     # Create a knowledge topic & page
     res_k = client.post(
@@ -93,7 +106,9 @@ def test_documents_and_knowledge_company_folder(client):
     )
     assert res_k.status_code == 201
     k_node = res_k.get_json()["data"]
-    assert k_node["document"]["path"].startswith("swissmem-technik-ag/")
+    assert "path" not in k_node["document"]
+    docs_root = client.application.config["DOCUMENTS_ROOT"]
+    assert os.path.isdir(os.path.join(docs_root, "vektorwerk-technik-ag"))
 
     # Path traversal check
     with client.application.app_context():
@@ -101,8 +116,72 @@ def test_documents_and_knowledge_company_folder(client):
             resolve_safe_path("../../etc/passwd")
 
 
+def test_knowledge_visibility_and_ownership(client):
+    csrf_trainer, _ = login(client, "trainer@vektorwerk.ch")
+    res_t = client.post(
+        "/api/knowledge",
+        json={
+            "title": "Trainer-Thema",
+            "description": "Vom Ausbildner erstellt",
+            "content": "# Trainer-Thema",
+        },
+        headers={"X-CSRF-Token": csrf_trainer},
+    )
+    assert res_t.status_code == 201
+    trainer_node = res_t.get_json()["data"]
+
+    csrf_student, student = login(client, "student@vektorwerk.ch")
+    res_s = client.post(
+        "/api/knowledge",
+        json={
+            "title": "Lernenden-Thema",
+            "description": "Vom Lernenden erstellt",
+            "content": "# Lernenden-Thema",
+        },
+        headers={"X-CSRF-Token": csrf_student},
+    )
+    assert res_s.status_code == 201
+    student_node = res_s.get_json()["data"]
+
+    # A learner cannot create a page under someone else's topic
+    res_parent = client.post(
+        "/api/knowledge",
+        json={"title": "Fremde Seite", "parent_id": trainer_node["id"]},
+        headers={"X-CSRF-Token": csrf_student},
+    )
+    assert res_parent.status_code == 403
+
+    # A learner only sees their own entries
+    student_list = client.get("/api/knowledge").get_json()["data"]
+    assert {node["title"] for node in student_list} == {"Lernenden-Thema"}
+    assert student_list[0]["author"] == student["id"]
+    assert student_list[0]["author_name"] == "Lukas Frei"
+
+    # A learner cannot even see, let alone edit, a trainer's entry
+    res_edit = client.put(
+        f"/api/knowledge/{trainer_node['id']}",
+        json={"title": "Manipuliert"},
+        headers={"X-CSRF-Token": csrf_student},
+    )
+    assert res_edit.status_code == 404
+
+    # The trainer sees their own entry and the assigned learner's entry
+    csrf_trainer, _ = login(client, "trainer@vektorwerk.ch")
+    trainer_list = client.get("/api/knowledge").get_json()["data"]
+    trainer_titles = {node["title"] for node in trainer_list}
+    assert {"Trainer-Thema", "Lernenden-Thema"} <= trainer_titles
+
+    # Trainers can view, but not edit, their learners' entries
+    res_edit_learner = client.put(
+        f"/api/knowledge/{student_node['id']}",
+        json={"title": "Korrektur"},
+        headers={"X-CSRF-Token": csrf_trainer},
+    )
+    assert res_edit_learner.status_code == 403
+
+
 def test_grades_and_implementation_workflow(client):
-    csrf_stu, student = login(client, "student@swissmem.ch")
+    csrf_stu, student = login(client, "student@vektorwerk.ch")
 
     # Student adds a grade
     res_g = client.post(
@@ -116,7 +195,13 @@ def test_grades_and_implementation_workflow(client):
         headers={"X-CSRF-Token": csrf_stu},
     )
     assert res_g.status_code == 201
-    assert res_g.get_json()["data"]["grade"] == 5.5
+    created = res_g.get_json()["data"]
+    assert created["grade"] == 5.5
+    assert created["semester"] == 4
+
+    res_list = client.get("/api/grades")
+    assert res_list.status_code == 200
+    assert res_list.get_json()["data"][0]["semester"] == 4
 
     # Student cannot create a new User
     res_forbidden = client.post(

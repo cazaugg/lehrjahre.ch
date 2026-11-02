@@ -1,6 +1,7 @@
 <script setup>
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
+import BrandLogo from './BrandLogo.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -18,9 +19,8 @@ const navItems = [
     label: 'Lerndokumentation',
     children: [
       { to: '/lerndokumentation/noten', label: 'Noten & Prüfungen' },
-      { to: '/lerndokumentation/zeugnisse', label: 'Zeugnisse' },
+      { to: '/lerndokumentation/nachweise', label: 'Zeugnisse & Kursnachweise' },
       { to: '/lerndokumentation/gespraeche', label: 'Ausbildungsgespräche' },
-      { to: '/lerndokumentation/kursnachweise', label: 'Kursnachweise' },
       { to: '/lerndokumentation/lernjournal', label: 'Lernjournal' }
     ]
   },
@@ -30,25 +30,14 @@ const navItems = [
     label: 'Wissen & Notizen'
   },
   {
-    to: '/personen/vorgesetzte',
+    to: '/personen',
     prefix: '/personen',
-    label: 'Personen',
-    children: [
-      { to: '/personen/vorgesetzte', label: 'Vorgesetzte (Kontakt)' },
-      { to: '/personen/lernende', label: 'Lernende (Admin)' },
-      { to: '/personen/vertrag', label: 'Lehrvertrag' },
-      { to: '/personen/bewerbung', label: 'Bewerbung' }
-    ]
+    label: 'Personen'
   },
   {
-    to: '/account/kontakt',
+    to: '/account',
     prefix: '/account',
-    label: 'Account',
-    children: [
-      { to: '/account/kontakt', label: 'Kontaktangaben' },
-      { to: '/account/passwort', label: 'Passwort' },
-      { to: '/account/foto', label: 'Foto' }
-    ]
+    label: 'Account'
   }
 ]
 
@@ -66,9 +55,12 @@ async function handleLogout() {
   <div class="app-shell">
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <span class="swiss-cross">+</span>
+        <BrandLogo :size="40" />
         <div>
-          <div class="brand-title">lehrjahre.ch</div>
+          <div class="brand-title">
+            <span>lehrjahre.ch</span>
+            <span class="badge badge-warning" title="Frühe Prototyp-Version">Alpha</span>
+          </div>
           <div class="brand-sub">MEM Lerndokumentation</div>
         </div>
       </div>
@@ -166,20 +158,10 @@ async function handleLogout() {
   border-bottom: 1px solid #374151;
 }
 
-.swiss-cross {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  background: var(--color-primary);
-  color: #ffffff;
-  font-weight: 800;
-  font-size: 1.35rem;
-  border-radius: var(--radius-sm);
-}
-
 .brand-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   font-weight: 700;
   font-size: 1.1rem;
   color: #ffffff;
