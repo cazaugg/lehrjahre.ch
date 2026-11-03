@@ -133,14 +133,22 @@ class Project(db.Model):
     )
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, default="")
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
     author = db.Column(
         db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
     goals = db.Column(db.Text, default="[]")  # Stored as JSON list of strings/objects
+    assigned_students = db.Column(db.Text, default="[]")  # Stored as JSON list of student IDs
     start_date = db.Column(db.Date, nullable=True)
     due_date = db.Column(db.Date, nullable=True)
+    is_published = db.Column(db.Boolean, default=False, nullable=False)
+    is_completed = db.Column(db.Boolean, default=False, nullable=False)
+    global_eval_text = db.Column(db.Text, default="")
 
     author_user = db.relationship("User", foreign_keys=[author], lazy="joined")
+    document = db.relationship("Documents", foreign_keys=[document_id], lazy="joined")
 
     def parsed_goals(self):
         if not self.goals:
@@ -151,12 +159,31 @@ class Project(db.Model):
         except Exception:
             return [line.strip() for line in self.goals.splitlines() if line.strip()]
 
+    def parsed_assigned_students(self):
+        if not self.assigned_students:
+            return []
+        try:
+            data = json.loads(self.assigned_students)
+            if isinstance(data, list):
+                result = []
+                for x in data:
+                    try:
+                        result.append(int(x))
+                    except (TypeError, ValueError):
+                        pass
+                return result
+            return []
+        except Exception:
+            return []
+
     def to_dict(self):
         return {
             "id": self.id,
             "parent_project": self.parent_project,
             "title": self.title,
             "description": self.description or "",
+            "document_id": self.document_id,
+            "document": self.document.to_dict() if self.document else None,
             "author": self.author,
             "author_name": (
                 f"{self.author_user.name} {self.author_user.surname}"
@@ -164,8 +191,12 @@ class Project(db.Model):
                 else ""
             ),
             "goals": self.parsed_goals(),
+            "assigned_students": self.parsed_assigned_students(),
             "start_date": self.start_date.isoformat() if self.start_date else None,
             "due_date": self.due_date.isoformat() if self.due_date else None,
+            "is_published": bool(self.is_published),
+            "is_completed": bool(self.is_completed),
+            "global_eval_text": self.global_eval_text or "",
         }
 
 
@@ -184,11 +215,15 @@ class Participation(db.Model):
     )
     title = db.Column(db.String(200), nullable=False)
     text = db.Column(db.Text, default="")
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
     is_done = db.Column(db.Boolean, default=False, nullable=False)
 
     student_user = db.relationship("User", foreign_keys=[student], lazy="joined")
     supervisor_user = db.relationship("User", foreign_keys=[supervisor], lazy="joined")
     project_rel = db.relationship("Project", foreign_keys=[project], lazy="joined")
+    document = db.relationship("Documents", foreign_keys=[document_id], lazy="joined")
 
     def to_dict(self):
         return {
@@ -209,6 +244,8 @@ class Participation(db.Model):
             "project_title": self.project_rel.title if self.project_rel else "",
             "title": self.title,
             "text": self.text or "",
+            "document_id": self.document_id,
+            "document": self.document.to_dict() if self.document else None,
             "is_done": bool(self.is_done),
         }
 
@@ -225,7 +262,10 @@ class Eval(db.Model):
         db.ForeignKey("participation.id", ondelete="SET NULL"),
         nullable=True,
     )
-    goal = db.Column(db.String(255), nullable=False)
+    target_type = db.Column(
+        db.String(50), default="goal", nullable=False
+    )  # 'project' | 'task' | 'goal'
+    goal = db.Column(db.String(255), default="", nullable=False)
     student = db.Column(
         db.Integer, db.ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
@@ -234,6 +274,9 @@ class Eval(db.Model):
     )
     planning_text = db.Column(db.Text, default="")
     eval_text = db.Column(db.Text, default="")
+    score_type = db.Column(db.String(50), nullable=True)  # 'grade' | 'percent' | None
+    score_value = db.Column(db.Float, nullable=True)
+    is_released = db.Column(db.Boolean, default=False, nullable=False)
 
     student_user = db.relationship("User", foreign_keys=[student], lazy="joined")
     supervisor_user = db.relationship("User", foreign_keys=[supervisor], lazy="joined")
@@ -245,7 +288,8 @@ class Eval(db.Model):
             "project": self.project,
             "project_title": self.project_rel.title if self.project_rel else "",
             "participation": self.participation,
-            "goal": self.goal,
+            "target_type": self.target_type or "goal",
+            "goal": self.goal or "",
             "student": self.student,
             "student_name": (
                 f"{self.student_user.name} {self.student_user.surname}"
@@ -260,6 +304,13 @@ class Eval(db.Model):
             ),
             "planning_text": self.planning_text or "",
             "eval_text": self.eval_text or "",
+            "score_type": self.score_type,
+            "score_value": (
+                round(float(self.score_value), 2)
+                if self.score_value is not None
+                else None
+            ),
+            "is_released": bool(self.is_released),
         }
 
 

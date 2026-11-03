@@ -22,6 +22,7 @@ VALID_TYPES = {
     "vertrag",
     "bewerbung",
     "profilbild",
+    "projekt",
     "sonstiges",
 }
 
@@ -32,8 +33,10 @@ def can_access_document(actor: User, doc: Documents) -> bool:
     owner = db.session.get(User, doc.owner)
     if not owner or owner.company != actor.company:
         return False
-    # Shared templates or knowledge pages in the same company
+    # Shared templates, knowledge pages, or trainer project documents in the same company
     if doc.is_template or doc.type in {"wissen", "profilbild"}:
+        return True
+    if doc.type == "projekt" and owner.role == "ausbildner":
         return True
     return can_access_student(actor, doc.owner)
 

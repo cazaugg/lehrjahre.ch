@@ -210,3 +210,127 @@ def test_grades_and_implementation_workflow(client):
         headers={"X-CSRF-Token": csrf_stu},
     )
     assert res_forbidden.status_code == 403
+
+
+def test_project_planning_implementation_and_evaluation_workflow(client):
+    csrf_tr, trainer = login(client, "trainer@vektorwerk.ch")
+    students = client.get("/api/user?role=lernender").get_json()["data"]["users"]
+    student_id = students[0]["id"]
+
+    # 1. Supervisor creates a project draft with subtasks
+    res_create = client.post(
+        "/api/project",
+        json={
+            "title": "Fertigungsprojekt Fräsen",
+            "description": "Hauptauftrag für das Fräsprojekt",
+            "assigned_students": [student_id],
+            "goals": ["Toleranz einhalten", "Arbeitssicherheit beachten"],
+            "is_published": False,
+            "tasks": [
+                {"title": "Aufgabe 1: Rohteil vorbereiten", "description": "Zuschnitt"},
+                {"title": "Aufgabe 2: Endbearbeitung", "description": "Schlichten"},
+            ],
+        },
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_create.status_code == 201
+    proj = res_create.get_json()["data"]
+    assert len(proj["tasks"]) == 2
+    task1_id = proj["tasks"][0]["id"]
+
+    # 2. Student cannot see unpublished project
+    csrf_stu, _ = login(client, "student@vektorwerk.ch")
+    stu_projects = client.get("/api/project").get_json()["data"]
+    assert len(stu_projects) == 0
+
+    # 3. Supervisor releases project (is_published = True)
+    csrf_tr, _ = login(client, "trainer@vektorwerk.ch")
+    res_pub = client.put(
+        f"/api/project/{proj['id']}",
+        json={"is_published": True},
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_pub.status_code == 200
+    assert res_pub.get_json()["data"]["is_published"] is True
+
+    # 4. Student now sees the project and submits Durchführung on Task 1
+    csrf_stu, _ = login(client, "student@vektorwerk.ch")
+    stu_projects = client.get("/api/project").get_json()["data"]
+    assert len(stu_projects) == 1
+
+    # Submitting on root project when subtasks exist is rejected
+    res_root_impl = client.post(
+        "/api/implementation",
+        json={"project": proj["id"], "text": "Hauptbericht", "is_done": True},
+        headers={"X-CSRF-Token": csrf_stu},
+    )
+    assert res_root_impl.status_code == 400
+
+    # Submitting on Task 1 with is_done=True locks it
+    res_task_impl = client.post(
+        "/api/implementation",
+        json={"project": task1_id, "text": "Rohteil erfolgreich gefräst.", "is_done": True},
+        headers={"X-CSRF-Token": csrf_stu},
+    )
+    assert res_task_impl.status_code == 201
+    impl_id = res_task_impl.get_json()["data"]["id"]
+
+    # Student cannot modify after release/submission
+    res_locked = client.put(
+        f"/api/implementation/{impl_id}",
+        json={"text": "Nachträgliche Änderung"},
+        headers={"X-CSRF-Token": csrf_stu},
+    )
+    assert res_locked.status_code == 403
+
+    # 5. Supervisor cannot edit student text, but can undo release (is_done=False)
+    csrf_tr, _ = login(client, "trainer@vektorwerk.ch")
+    res_tr_edit = client.put(
+        f"/api/implementation/{impl_id}",
+        json={"text": "Vom Ausbildner geändert"},
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_tr_edit.status_code == 403
+
+    res_tr_unlock = client.put(
+        f"/api/implementation/{impl_id}",
+        json={"is_done": False},
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_tr_unlock.status_code == 200
+    assert res_tr_unlock.get_json()["data"]["is_done"] is False
+
+    # 6. Supervisor saves Auswertung (global, project, task, goal) and releases it
+    res_eval = client.post(
+        f"/api/evaluation/project/{proj['id']}",
+        json={
+            "global_eval_text": "Gutes Gesamtergebnis.",
+            "is_completed": False,
+            "student": student_id,
+            "is_released": True,
+            "project_eval": {
+                "eval_text": "Saubere Ausführung über das gesamte Projekt.",
+                "score_type": "grade",
+                "score_value": 5.3,
+            },
+            "task_evals": [
+                {
+                    "task_id": task1_id,
+                    "eval_text": "Masshaltig vorbereitet.",
+                    "score_type": "percent",
+                    "score_value": 92,
+                }
+            ],
+            "goal_evals": [
+                {"goal": "Toleranz einhalten", "eval_text": "Alle Toleranzen erreicht."}
+            ],
+        },
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_eval.status_code == 200
+
+    # Student can now read the released evaluation
+    csrf_stu, _ = login(client, "student@vektorwerk.ch")
+    detail = client.get(f"/api/project/{proj['id']}").get_json()["data"]
+    assert detail["global_eval_text"] == "Gutes Gesamtergebnis."
+    assert len(detail["evaluations"]) == 3
