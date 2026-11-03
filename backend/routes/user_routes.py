@@ -58,7 +58,7 @@ def list_users():
     role_filter = request.args.get("role")
     subordinate_only = request.args.get("subordinate_only") == "true"
 
-    query = User.query.filter_by(company=actor.company)
+    query = User.query.filter_by(company_id=actor.company_id)
     if role_filter in {"lernender", "ausbildner"}:
         query = query.filter_by(role=role_filter)
     if subordinate_only and is_supervisor(actor):
@@ -67,7 +67,7 @@ def list_users():
     users = query.order_by(User.start_date.desc().nullslast(), User.id.desc()).all()
     relations = (
         UserRelation.query.join(User, UserRelation.student == User.id)
-        .filter(User.company == actor.company)
+        .filter(User.company_id == actor.company_id)
         .all()
     )
 
@@ -86,7 +86,7 @@ def list_users():
 def get_user(user_id):
     actor = get_current_user()
     target = db.session.get(User, user_id)
-    if not target or target.company != actor.company:
+    if not target or target.company_id != actor.company_id:
         return jsonify({"error": "Benutzer nicht gefunden."}), 404
 
     supervisors = UserRelation.query.filter_by(student=target.id).all()
@@ -102,6 +102,7 @@ def get_user(user_id):
 @role_required("ausbildner")
 def create_user():
     actor = get_current_user()
+    company = actor.company_rel
 
     data = request.get_json(silent=True) or {}
     role = (data.get("role") or "lernender").strip().lower()
@@ -121,14 +122,30 @@ def create_user():
             }
         ), 400
 
+    if not company or not company.matches_email(company_email):
+        domain = company.email_domain if company else ""
+        return jsonify(
+            {
+                "error": (
+                    f"Die Firmen-E-Mail muss zur Domain @{domain} gehören."
+                    if domain
+                    else "Für den Benutzer ist keine Firma hinterlegt."
+                )
+            }
+        ), 400
+
     if User.query.filter(User.company_email.ilike(company_email)).first():
         return jsonify({"error": "Diese Firmen-E-Mail wird bereits verwendet."}), 400
+
+    company_address = (data.get("company_address") or "").strip()
+    if not company_address:
+        company_address = (company.address or "").strip()
 
     new_user = User(
         role=role,
         name=name,
         surname=surname,
-        company=actor.company,
+        company_id=actor.company_id,
         password_hash=hash_password(password),
         private_address=(data.get("private_address") or "").strip(),
         private_email=(data.get("private_email") or "").strip(),
@@ -136,7 +153,7 @@ def create_user():
         school_address=(data.get("school_address") or "").strip(),
         school_email=(data.get("school_email") or "").strip(),
         school_phone=(data.get("school_phone") or "").strip(),
-        company_address=(data.get("company_address") or "").strip(),
+        company_address=company_address,
         company_email=company_email,
         company_phone=(data.get("company_phone") or "").strip(),
         start_date=parse_date(data.get("start_date")),
@@ -151,7 +168,11 @@ def create_user():
     supervisor_id = data.get("supervisor_id")
     if role == "lernender" and supervisor_id:
         sup = db.session.get(User, int(supervisor_id))
-        if sup and sup.company == new_user.company and sup.role == "ausbildner":
+        if (
+            sup
+            and sup.company_id == new_user.company_id
+            and sup.role == "ausbildner"
+        ):
             db.session.add(UserRelation(supervisor=sup.id, student=new_user.id))
             db.session.commit()
             if hasattr(g, "_supervised_student_ids"):
@@ -165,7 +186,7 @@ def create_user():
 def update_user(user_id):
     actor = get_current_user()
     target = db.session.get(User, user_id)
-    if not target or target.company != actor.company:
+    if not target or target.company_id != actor.company_id:
         return jsonify({"error": "Benutzer nicht gefunden."}), 404
 
     if actor.id != target.id and not can_edit_user_contacts(actor, target):
@@ -174,6 +195,9 @@ def update_user(user_id):
         ), 403
 
     data = request.get_json(silent=True) or {}
+
+    if "company_id" in data or "company" in data:
+        return jsonify({"error": "Die Firma kann nicht geändert werden."}), 400
 
     # Check if caller attempts to update contact fields
     has_contact_edits = any(field in data for field in CONTACT_FIELDS)
@@ -219,6 +243,15 @@ def update_user(user_id):
             target.role = data["role"]
         if "company_email" in data and data["company_email"]:
             new_email = data["company_email"].strip().lower()
+            if not target.company_rel.matches_email(new_email):
+                return jsonify(
+                    {
+                        "error": (
+                            "Die Firmen-E-Mail muss zur Domain "
+                            f"@{target.company_rel.email_domain} gehören."
+                        )
+                    }
+                ), 400
             existing = User.query.filter(
                 User.company_email.ilike(new_email), User.id != target.id
             ).first()
@@ -257,7 +290,7 @@ def delete_user(user_id):
         return jsonify({"error": "Das eigene Konto kann nicht gelöscht werden."}), 400
 
     target = db.session.get(User, user_id)
-    if not target or target.company != actor.company:
+    if not target or target.company_id != actor.company_id:
         return jsonify({"error": "Benutzer nicht gefunden."}), 404
 
     if target.role == "lernender" and not can_edit_student_master_data(actor, target):
@@ -284,8 +317,8 @@ def add_relation():
     if (
         not sup
         or not stu
-        or sup.company != actor.company
-        or stu.company != actor.company
+        or sup.company_id != actor.company_id
+        or stu.company_id != actor.company_id
     ):
         return jsonify({"error": "Ungültige Benutzerzuordnung."}), 400
 
@@ -312,7 +345,7 @@ def remove_relation(relation_id):
         return jsonify({"error": "Zuordnung nicht gefunden."}), 404
 
     stu = db.session.get(User, rel.student)
-    if not stu or stu.company != actor.company:
+    if not stu or stu.company_id != actor.company_id:
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     db.session.delete(rel)

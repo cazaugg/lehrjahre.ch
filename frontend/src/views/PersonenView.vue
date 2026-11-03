@@ -723,8 +723,12 @@ function formatDate(d) {
               v-model="newCompanyEmail"
               type="email"
               class="form-control"
+              :placeholder="`vorname.nachname@${auth.user?.company_domain || 'firma.ch'}`"
               required
             />
+            <small class="text-muted">
+              Muss auf @{{ auth.user?.company_domain || 'firma.ch' }} enden.
+            </small>
           </div>
           <div class="form-group">
             <label class="form-label">Firmen-Telefon</label>

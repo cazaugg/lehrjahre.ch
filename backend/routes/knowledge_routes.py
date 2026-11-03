@@ -77,7 +77,9 @@ def create_knowledge_node():
     content = data.get("content") or f"# {title}\n\n{description}"
 
     # Every knowledge node stores its page content as a document in /data/documents/<company-slug>/
-    clean_filename, rel_path = save_text_document(content, title, actor.company)
+    clean_filename, rel_path = save_text_document(
+        content, title, actor.company_rel.name
+    )
     doc = Documents(
         name=title,
         description=description,
@@ -143,12 +145,12 @@ def update_knowledge_node(node_id):
             save_text_document(
                 content,
                 node.title,
-                actor.company,
+                actor.company_rel.name,
                 existing_rel_path=node.document.path,
             )
     elif content is not None:
         clean_filename, rel_path = save_text_document(
-            content, node.title, actor.company
+            content, node.title, actor.company_rel.name
         )
         doc = Documents(
             name=node.title,

@@ -56,6 +56,14 @@ Zugriff:
 | Eigene Einträge | Erfassen, Bearbeiten, Löschen | Erfassen, Bearbeiten, Löschen |
 | Fremde Einträge | Anzeigen                      | ---                           |
 
+## Firmen
+
+- Jede Person gehört zu genau einer Firma.
+- Die Firmen-E-Mail muss zur E-Mail-Domain der Firma passen.
+- Die Firma einer Person kann nicht geändert werden.
+- Neue Personen übernehmen die Adresse der Firma als Standard für den Betriebsstandort.
+- Firmen werden über den Seed oder die CLI (`python -m backend.companies`) verwaltet.
+
 ## Personen
 
 Vorgesetzte:

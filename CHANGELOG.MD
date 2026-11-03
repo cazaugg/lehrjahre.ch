@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Backend:** Added a `company` table and moved users from the free-text `company` column to a mandatory `company_id` foreign key. Company membership cannot be changed through the API.
+- **Backend:** Enforced that a user's `company_email` matches the company's `email_domain`. New users inherit the company address when none is supplied.
+- **Tooling:** Added `backend.companies` CLI (`add`, `list`) for provisioning companies and a startup migration for existing SQLite databases.
+- **Frontend:** Added a domain hint to the create-user form.
 - **Frontend:** Added a read-only Word (`.docx`) preview in document views using lazy-loaded `docx-preview`; other binary files keep the existing open/download fallback.
 - **Frontend:** Added a read-only PDF preview using the browser's native PDF viewer, plus a generated 2-page PDF example in the seed data.
 - **Tooling:** Upgraded to Node.js 26 LTS and Python 3.14; refreshed frontend dependencies (Vite 8, Vue Router 5, Pinia 4) and backend dependencies (Flask 3.1, Werkzeug 3.1, argon2-cffi 25, pytest 9).

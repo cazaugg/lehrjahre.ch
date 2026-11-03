@@ -14,7 +14,9 @@ Digitale Lerndokumentation für MEM Berufslehren in der Schweiz.
 ## Architecture & Design Choices
 
 - **Authentication & Security:** Server-side Flask sessions with `HttpOnly`, `SameSite=Lax` cookies, Argon2id password hashing (`argon2-cffi`), and `X-CSRF-Token` validation on all state-changing API calls. Configured with `ProxyFix` for deployment behind a reverse proxy and WAF.
-- **Database (`data/lehrjahre.db`):** SQLite via SQLAlchemy using the 8 core tables (`user`, `user_relation`, `project`, `participation`, `eval`, `grades`, `documents`, `knowledge`).
+- **Database (`data/lehrjahre.db`):** SQLite via SQLAlchemy using the 9 core tables (`company`, `user`, `user_relation`, `project`, `participation`, `eval`, `grades`, `documents`, `knowledge`).
+  - `company` stores the tenant name, its email domain, and the default company address.
+  - Every `user` belongs to exactly one `company` via `company_id`; the company cannot be changed through the API. A user's `company_email` must match the company's `email_domain`. New users inherit `company.address` when no company address is supplied.
   - `user.role` distinguishes `'ausbildner'` and `'lernender'`, while `user.job_title` stores either the trainer function (`Administrator`, `Berufsbildner`, `Fachvorgesetzter`, `Kursleiter`, `Lehrer`, `HR / Rekrutierung`) or the apprentice's MEM profession.
   - `knowledge` models the `Thema -> Seite` hierarchy (`parent_id`) and links via `document_id` to `documents`.
 - **Company-Scoped File Storage (`data/documents/<company-slug>/`):** Uploaded files (PDFs, images, certificates) and Markdown/text documents (`lernjournal`, `wissen`, `ausbildungsgespraech`, `vertrag`) are stored on disk per company and served through `/api/documents/<id>/file` with strict path-traversal protection.
@@ -37,6 +39,13 @@ Seed demo data once (skipped if the database already has users):
 
 ```bash
 uv run python -m backend.seed
+```
+
+Create another company (tenant) before adding its users:
+
+```bash
+uv run python -m backend.companies add "Muster AG" "muster.ch" --address "Musterstrasse 1, 8000 Zürich"
+uv run python -m backend.companies list
 ```
 
 **Demo Accounts (Password: `Lehrjahre2026!`):**

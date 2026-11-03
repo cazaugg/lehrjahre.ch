@@ -52,7 +52,7 @@ def list_documents():
             return jsonify({"error": "Keine Berechtigung."}), 403
 
     company_user_ids = [
-        u.id for u in User.query.filter_by(company=actor.company).all()
+        u.id for u in User.query.filter_by(company_id=actor.company_id).all()
     ]
     query = Documents.query.filter(Documents.owner.in_(company_user_ids))
 
@@ -168,7 +168,7 @@ def create_document():
             name = uploaded_file.filename
         try:
             clean_filename, rel_path = save_uploaded_file(
-                uploaded_file, owner_user.company
+                uploaded_file, owner_user.company_rel.name
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -176,7 +176,7 @@ def create_document():
         if not name:
             return jsonify({"error": "Dokumentname ist erforderlich."}), 400
         clean_filename, rel_path = save_text_document(
-            text_content, name, owner_user.company
+            text_content, name, owner_user.company_rel.name
         )
     else:
         return jsonify(
@@ -293,7 +293,10 @@ def update_document(doc_id):
     if "content" in data and data["content"] is not None:
         owner_user = db.session.get(User, doc.owner) or actor
         _, rel_path = save_text_document(
-            data["content"], doc.name, owner_user.company, existing_rel_path=doc.path
+            data["content"],
+            doc.name,
+            owner_user.company_rel.name,
+            existing_rel_path=doc.path,
         )
         doc.path = rel_path
 

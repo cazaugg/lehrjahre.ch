@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime, timezone
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import event
@@ -6,6 +7,29 @@ from sqlalchemy.engine import Engine
 import sqlite3
 
 db = SQLAlchemy()
+
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$"
+)
+
+
+def normalize_email_domain(value: str) -> str:
+    """Return a normalized email domain (lowercase, without leading @)."""
+    domain = (value or "").strip().lower().lstrip("@")
+    if not domain or not _DOMAIN_RE.match(domain):
+        raise ValueError("Ungültige E-Mail-Domain.")
+    return domain
+
+
+def email_domain(email: str) -> str | None:
+    """Return the normalized domain of a valid email address, else None."""
+    value = (email or "").strip().lower()
+    if value.count("@") != 1:
+        return None
+    local, domain = value.split("@", 1)
+    if not local or not domain or not _DOMAIN_RE.match(domain):
+        return None
+    return domain
 
 
 def semester_for_date(exam_date, start_date, end_date):
@@ -35,6 +59,39 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.close()
 
 
+class Company(db.Model):
+    __tablename__ = "company"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False, unique=True)
+    email_domain = db.Column(db.String(150), nullable=False, unique=True)
+    address = db.Column(db.String(255), default="")
+
+    users = db.relationship("User", back_populates="company_rel")
+
+    @db.validates("name")
+    def validate_name(self, key, value):
+        name = (value or "").strip()
+        if not name:
+            raise ValueError("Firmenname ist erforderlich.")
+        return name
+
+    @db.validates("email_domain")
+    def validate_email_domain(self, key, value):
+        return normalize_email_domain(value)
+
+    def matches_email(self, email: str) -> bool:
+        return email_domain(email) == (self.email_domain or "").lower()
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email_domain": self.email_domain,
+            "address": self.address or "",
+        }
+
+
 class User(db.Model):
     __tablename__ = "user"
 
@@ -42,8 +99,16 @@ class User(db.Model):
     role = db.Column(db.String(50), nullable=False)  # 'ausbildner' | 'lernender'
     name = db.Column(db.String(120), nullable=False)
     surname = db.Column(db.String(120), nullable=False)
-    company = db.Column(db.String(150), nullable=False)
+    company_id = db.Column(
+        db.Integer,
+        db.ForeignKey("company.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     password_hash = db.Column(db.String(255), nullable=False)
+
+    company_rel = db.relationship(
+        "Company", back_populates="users", lazy="joined"
+    )
 
     # Contacts: private, school, company
     private_address = db.Column(db.String(255), default="")
@@ -72,7 +137,11 @@ class User(db.Model):
             "name": self.name,
             "surname": self.surname,
             "full_name": f"{self.name} {self.surname}".strip(),
-            "company": self.company,
+            "company_id": self.company_id,
+            "company": self.company_rel.name if self.company_rel else "",
+            "company_domain": (
+                self.company_rel.email_domain if self.company_rel else ""
+            ),
             "private_address": self.private_address or "",
             "private_email": self.private_email or "",
             "private_phone": self.private_phone or "",
@@ -402,6 +471,115 @@ class Knowledge(db.Model):
         }
 
 
+def _table_columns(cursor, table: str) -> set[str]:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _migrate_company_membership(cursor):
+    """Move legacy free-text user.company values into the company table."""
+    user_columns = _table_columns(cursor, "user")
+    if "company" not in user_columns:
+        return
+
+    if "company_id" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE user ADD COLUMN company_id INTEGER REFERENCES company(id)"
+        )
+
+    cursor.execute(
+        "SELECT id, company, company_email, company_address FROM user ORDER BY id"
+    )
+    rows = cursor.fetchall()
+
+    grouped: dict[str, list[tuple[int, str, str]]] = {}
+    for user_id, company_name, company_email, company_address in rows:
+        name = (company_name or "").strip()
+        if not name:
+            raise RuntimeError(
+                "Migration failed: user "
+                f"{user_id} has no company name. Fix the legacy user.company value."
+            )
+        grouped.setdefault(name, []).append(
+            (user_id, company_email, company_address)
+        )
+
+    for company_name, entries in grouped.items():
+        domains = {
+            domain
+            for _, company_email, _ in entries
+            if (domain := email_domain(company_email))
+        }
+        if len(domains) != 1:
+            found = ", ".join(sorted(domains)) or "keine gültige Domain"
+            raise RuntimeError(
+                "Migration failed: company "
+                f"'{company_name}' has inconsistent email domains ({found}). "
+                "Fix the company_email values before starting the app."
+            )
+        domain = next(iter(domains))
+        address = next(
+            (
+                (company_address or "").strip()
+                for _, _, company_address in entries
+                if (company_address or "").strip()
+            ),
+            "",
+        )
+
+        cursor.execute(
+            "SELECT id, address FROM company WHERE name = ?", (company_name,)
+        )
+        existing = cursor.fetchone()
+        if existing:
+            company_id = existing[0]
+            if not (existing[1] or "").strip() and address:
+                cursor.execute(
+                    "UPDATE company SET address = ? WHERE id = ?",
+                    (address, company_id),
+                )
+        else:
+            cursor.execute(
+                "SELECT id FROM company WHERE email_domain = ?", (domain,)
+            )
+            if cursor.fetchone():
+                raise RuntimeError(
+                    "Migration failed: domain "
+                    f"'{domain}' is already assigned to another company."
+                )
+            cursor.execute(
+                "INSERT INTO company (name, email_domain, address) VALUES (?, ?, ?)",
+                (company_name, domain, address),
+            )
+            company_id = cursor.lastrowid
+
+        cursor.execute(
+            "UPDATE user SET company_id = ? WHERE company = ?",
+            (company_id, company_name),
+        )
+        if address:
+            cursor.execute(
+                "UPDATE user SET company_address = ? "
+                "WHERE company = ? "
+                "AND (company_address IS NULL OR TRIM(company_address) = '')",
+                (address, company_name),
+            )
+
+    cursor.execute("SELECT COUNT(*) FROM user WHERE company_id IS NULL")
+    if cursor.fetchone()[0]:
+        raise RuntimeError(
+            "Migration failed: not every user could be assigned to a company."
+        )
+
+    try:
+        cursor.execute("ALTER TABLE user DROP COLUMN company")
+    except sqlite3.OperationalError as exc:
+        raise RuntimeError(
+            "Migration failed: dropping the legacy user.company column requires "
+            "SQLite 3.35 or newer."
+        ) from exc
+
+
 def ensure_schema_columns():
     """Ensure newly added columns exist on pre-existing SQLite databases."""
     migrations = [
@@ -413,10 +591,10 @@ def ensure_schema_columns():
     try:
         cursor = conn.cursor()
         for table, column, col_def in migrations:
-            cursor.execute(f"PRAGMA table_info({table})")
-            existing_cols = {row[1] for row in cursor.fetchall()}
+            existing_cols = _table_columns(cursor, table)
             if column not in existing_cols:
                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+        _migrate_company_membership(cursor)
         conn.commit()
         cursor.close()
     finally:

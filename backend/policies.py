@@ -32,7 +32,7 @@ def supervised_student_ids(actor: User | None) -> set[int]:
             UserRelation.query.join(User, UserRelation.student == User.id)
             .filter(
                 UserRelation.supervisor == actor.id,
-                User.company == actor.company,
+                User.company_id == actor.company_id,
                 User.role == "lernender",
             )
             .all()
@@ -73,7 +73,7 @@ def can_view_private_contacts(actor: User | None, target: User | None) -> bool:
     - Supervisors can view private contacts ONLY of their subordinate students.
     - Never visible for other supervisors or non-subordinate students.
     """
-    if not actor or not target or actor.company != target.company:
+    if not actor or not target or actor.company_id != target.company_id:
         return False
     if actor.id == target.id:
         return True
@@ -88,7 +88,7 @@ def can_edit_user_contacts(actor: User | None, target: User | None) -> bool:
       and all contacts of their subordinate students.
     - Students cannot edit any contact fields (not even their own).
     """
-    if not actor or not target or actor.company != target.company:
+    if not actor or not target or actor.company_id != target.company_id:
         return False
     if not is_supervisor(actor):
         return False
@@ -101,7 +101,7 @@ def can_edit_user_contacts(actor: User | None, target: User | None) -> bool:
 
 def can_edit_student_master_data(actor: User | None, target: User | None) -> bool:
     """Supervisors can edit master data of their subordinate students."""
-    if not actor or not target or actor.company != target.company:
+    if not actor or not target or actor.company_id != target.company_id:
         return False
     if not is_supervisor(actor):
         return False
@@ -132,9 +132,9 @@ def serialize_user(target: User, actor: User | None) -> dict:
 # Projekte, Themen & Praktika Policies
 # ---------------------------------------------------------------------------
 
-def _company_projects_by_id(company: str) -> dict[int, Project]:
+def _company_projects_by_id(company_id: int) -> dict[int, Project]:
     company_user_ids = [
-        u.id for u in User.query.filter_by(company=company).all()
+        u.id for u in User.query.filter_by(company_id=company_id).all()
     ]
     projects = Project.query.filter(
         (Project.author.in_(company_user_ids)) | (Project.author.is_(None))
@@ -154,7 +154,7 @@ def visible_project_ids_for(actor: User | None) -> set[int]:
     if not actor:
         return set()
 
-    proj_map = _company_projects_by_id(actor.company)
+    proj_map = _company_projects_by_id(actor.company_id)
     if not proj_map:
         return set()
 
@@ -267,7 +267,7 @@ def can_view_document(actor: User | None, doc: Documents | None) -> bool:
     if not actor or not doc:
         return False
     owner = db.session.get(User, doc.owner)
-    if not owner or owner.company != actor.company:
+    if not owner or owner.company_id != actor.company_id:
         return False
 
     # Profile pictures belong to company contact data -> visible within company
@@ -297,7 +297,7 @@ def can_create_document(
     if not actor:
         return False
     owner = db.session.get(User, owner_id)
-    if not owner or owner.company != actor.company:
+    if not owner or owner.company_id != actor.company_id:
         return False
 
     if is_template:

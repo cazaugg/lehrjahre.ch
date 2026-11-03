@@ -3,7 +3,7 @@ import tempfile
 from datetime import date
 import pytest
 from backend.app import create_app
-from backend.models import db, User, UserRelation
+from backend.models import db, Company, User, UserRelation
 from backend.auth import hash_password
 from backend.storage import resolve_safe_path
 
@@ -25,12 +25,19 @@ def client():
 
     with app.app_context():
         db.create_all()
+        company = Company(
+            name="Vektorwerk Technik AG",
+            email_domain="vektorwerk.ch",
+            address="Industriestrasse 1",
+        )
+        db.session.add(company)
+        db.session.flush()
         # Supervisor 1 (supervises student 1)
         trainer1 = User(
             role="ausbildner",
             name="Thomas",
             surname="Keller",
-            company="Vektorwerk Technik AG",
+            company_id=company.id,
             password_hash=hash_password("Passwort123!"),
             private_address="Trainer1 Privatweg 1",
             private_email="trainer1@privat.ch",
@@ -48,7 +55,7 @@ def client():
             role="ausbildner",
             name="Marco",
             surname="Brunner",
-            company="Vektorwerk Technik AG",
+            company_id=company.id,
             password_hash=hash_password("Passwort123!"),
             private_address="Trainer2 Privatweg 2",
             private_email="trainer2@privat.ch",
@@ -66,7 +73,7 @@ def client():
             role="lernender",
             name="Lukas",
             surname="Frei",
-            company="Vektorwerk Technik AG",
+            company_id=company.id,
             password_hash=hash_password("Passwort123!"),
             private_address="Student1 Privatweg 10",
             private_email="student1@privat.ch",
@@ -86,7 +93,7 @@ def client():
             role="lernender",
             name="Elena",
             surname="Schmid",
-            company="Vektorwerk Technik AG",
+            company_id=company.id,
             password_hash=hash_password("Passwort123!"),
             private_address="Student2 Privatweg 20",
             private_email="student2@privat.ch",
@@ -710,3 +717,64 @@ def test_personen_and_account_contact_privacy(client):
         ).status_code
         == 403
     )
+
+
+def test_company_membership_and_email_domain(client):
+    csrf, trainer = login(client, "trainer@vektorwerk.ch")
+
+    def create_user(email, **extra):
+        payload = {
+            "role": "lernender",
+            "name": "Max",
+            "surname": "Muster",
+            "company_email": email,
+            "job_title": "Polymechanikerin / Polymechaniker EFZ",
+            "supervisor_id": trainer["id"],
+            **extra,
+        }
+        return client.post(
+            "/api/user", json=payload, headers={"X-CSRF-Token": csrf}
+        )
+
+    # A company email outside the company domain is rejected
+    res = create_user("max.muster@other.ch")
+    assert res.status_code == 400
+    assert "vektorwerk.ch" in res.get_json()["error"]
+
+    # A matching company email is accepted and the company address is inherited
+    res = create_user("max.muster@vektorwerk.ch")
+    assert res.status_code == 201
+    created = res.get_json()["data"]
+    assert created["company"] == "Vektorwerk Technik AG"
+    assert created["company_id"] == trainer["company_id"]
+    assert created["company_domain"] == "vektorwerk.ch"
+    assert created["company_address"] == "Industriestrasse 1"
+
+    # Company membership cannot be changed through the user endpoint
+    for payload in ({"company_id": 999}, {"company": "Andere AG"}):
+        res = client.put(
+            f"/api/user/{created['id']}",
+            json=payload,
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert res.status_code == 400
+        assert "Firma" in res.get_json()["error"]
+
+    # Changing the company email still respects the company domain
+    res = client.put(
+        f"/api/user/{created['id']}",
+        json={"company_email": "max.muster@other.ch"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert res.status_code == 400
+    assert "vektorwerk.ch" in res.get_json()["error"]
+
+    res = client.put(
+        f"/api/user/{created['id']}",
+        json={"company_email": "max.neu@vektorwerk.ch"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert res.status_code == 200
+    updated = res.get_json()["data"]
+    assert updated["company_email"] == "max.neu@vektorwerk.ch"
+    assert updated["company_id"] == trainer["company_id"]

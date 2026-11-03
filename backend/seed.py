@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from backend.app import create_app
 from backend.models import (
     db,
+    Company,
     User,
     UserRelation,
     Project,
@@ -814,14 +815,23 @@ def seed_database():
             print("Database already contains users. Skipping seed.")
             return
 
-        company = "Vektorwerk Technik AG"
+        company_name = "Vektorwerk Technik AG"
+        company = Company.query.filter_by(name=company_name).first()
+        if not company:
+            company = Company(
+                name=company_name,
+                email_domain="vektorwerk.ch",
+                address="Industriestrasse 40, 8404 Winterthur",
+            )
+            db.session.add(company)
+            db.session.flush()
 
         # 1. Trainers (Ausbildner)
         admin = User(
             role="ausbildner",
             name="Thomas",
             surname="Keller",
-            company=company,
+            company_id=company.id,
             password_hash=hash_password("Lehrjahre2026!"),
             private_address="Bahnhofstrasse 12, 8400 Winterthur",
             private_email="thomas.keller@privat.ch",
@@ -839,7 +849,7 @@ def seed_database():
             role="ausbildner",
             name="Sandra",
             surname="Meier",
-            company=company,
+            company_id=company.id,
             password_hash=hash_password("Lehrjahre2026!"),
             private_address="Rosenweg 5, 8000 Zürich",
             private_email="s.meier@privat.ch",
@@ -857,7 +867,7 @@ def seed_database():
             role="ausbildner",
             name="Marco",
             surname="Brunner",
-            company=company,
+            company_id=company.id,
             password_hash=hash_password("Lehrjahre2026!"),
             private_address="Lindenstrasse 8, 8400 Winterthur",
             private_email="m.brunner@privat.ch",
@@ -876,7 +886,7 @@ def seed_database():
             role="lernender",
             name="Lukas",
             surname="Frei",
-            company=company,
+            company_id=company.id,
             password_hash=hash_password("Lehrjahre2026!"),
             private_address="Wiesenstrasse 19, 8400 Winterthur",
             private_email="lukas.frei@bluewin.ch",
@@ -896,7 +906,7 @@ def seed_database():
             role="lernender",
             name="Elena",
             surname="Schmid",
-            company=company,
+            company_id=company.id,
             password_hash=hash_password("Lehrjahre2026!"),
             private_address="Seestrasse 44, 8405 Winterthur",
             private_email="elena.schmid@gmail.com",
@@ -1073,7 +1083,9 @@ def seed_database():
             "## Erkenntnisse & Reflexion\n"
             "Beim Fräsen einer Passung muss zuerst mit Untermasfräser vorgefräst und danach die Breite mit Endmassen kontrolliert werden, bevor die Fertigmass-Zustellung erfolgt.\n"
         )
-        j_fn, j_path = save_text_document(journal_md, "Lernjournal_KW44", company)
+        j_fn, j_path = save_text_document(
+            journal_md, "Lernjournal_KW44", company.name
+        )
         doc_journal = Documents(
             name="Lernjournal KW 44 – Passfedernut fräsen",
             description="Wochenreflexion Fertigungstechnik",
@@ -1102,7 +1114,7 @@ def seed_database():
             "- Notenschnitt in der Berufsfachschule über 5.0 halten\n"
         )
         g_fn, g_path = save_text_document(
-            gespraech_md, "Probezeitgespraech_Lukas_Frei", company
+            gespraech_md, "Probezeitgespraech_Lukas_Frei", company.name
         )
         doc_gespraech = Documents(
             name="Probezeitgespräch (1. Lehrjahr)",
@@ -1137,7 +1149,7 @@ def seed_database():
             "2. \n"
         )
         t_fn, t_path = save_text_document(
-            tpl_gespraech_md, "Vorlage_Ausbildungsgespraech", company
+            tpl_gespraech_md, "Vorlage_Ausbildungsgespraech", company.name
         )
         doc_tpl = Documents(
             name="Vorlage Bildungsbericht / Ausbildungsgespräch",
@@ -1162,7 +1174,7 @@ def seed_database():
             "**Ferienanspruch:** 5 Wochen pro Lehrjahr\n"
         )
         v_fn, v_path = save_text_document(
-            vertrag_md, "Lehrvertrag_Lukas_Frei", company
+            vertrag_md, "Lehrvertrag_Lukas_Frei", company.name
         )
         doc_vertrag = Documents(
             name="Lehrvertrag Polymechaniker EFZ – Lukas Frei",
@@ -1178,7 +1190,7 @@ def seed_database():
         )
 
         word_fn, word_path = save_binary_document(
-            build_word_preview_docx(), "Word_Beispiel.docx", company
+            build_word_preview_docx(), "Word_Beispiel.docx", company.name
         )
         doc_word = Documents(
             name="Word-Beispielzeugnis (Vorschau, 2 Seiten)",
@@ -1194,7 +1206,7 @@ def seed_database():
         )
 
         pdf_fn, pdf_path = save_binary_document(
-            build_pdf_preview(), "PDF_Beispiel.pdf", company
+            build_pdf_preview(), "PDF_Beispiel.pdf", company.name
         )
         doc_pdf = Documents(
             name="PDF-Beispielkursnachweis (Vorschau, 2 Seiten)",
@@ -1216,7 +1228,7 @@ def seed_database():
 
         # 9. Knowledge Base (Wissen: Thema -> Seite)
         def add_knowledge(title, description, content, parent_id=None, owner_user=admin):
-            filename, path = save_text_document(content, title, company)
+            filename, path = save_text_document(content, title, company.name)
             doc = Documents(
                 name=title,
                 description=description,
