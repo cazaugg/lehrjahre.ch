@@ -7,6 +7,8 @@ from backend.policies import (
     visible_project_ids_for,
     can_view_project,
     can_manage_project,
+    manageable_project_ids_for,
+    serialize_project,
 )
 
 bp = Blueprint("api_project", __name__, url_prefix="/api/project")
@@ -47,7 +49,14 @@ def list_projects():
         .order_by(Project.start_date.desc().nullslast(), Project.id.desc())
         .all()
     )
-    return jsonify({"data": [p.to_dict() for p in projects]})
+    manageable_ids = manageable_project_ids_for(actor)
+    return jsonify(
+        {
+            "data": [
+                serialize_project(p, actor, manageable_ids) for p in projects
+            ]
+        }
+    )
 
 
 @bp.route("/<int:project_id>", methods=["GET"])
@@ -57,7 +66,7 @@ def get_project(project_id):
     project = db.session.get(Project, project_id)
     if not project or not can_view_project(actor, project):
         return jsonify({"error": "Projekt nicht gefunden."}), 404
-    return jsonify({"data": project.to_dict()})
+    return jsonify({"data": serialize_project(project, actor)})
 
 
 @bp.route("", methods=["POST"])
@@ -90,7 +99,7 @@ def create_project():
     )
     db.session.add(project)
     db.session.commit()
-    return jsonify({"data": project.to_dict()}), 201
+    return jsonify({"data": serialize_project(project, actor)}), 201
 
 
 @bp.route("/<int:project_id>", methods=["PUT"])
@@ -127,7 +136,7 @@ def update_project(project_id):
         project.planning_released = bool(data.get("planning_released"))
 
     db.session.commit()
-    return jsonify({"data": project.to_dict()})
+    return jsonify({"data": serialize_project(project, actor)})
 
 
 @bp.route("/<int:project_id>", methods=["DELETE"])

@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from backend.models import db, Eval, Project
+from backend.models import db, Eval, Project, Participation
 from backend.auth import login_required, get_current_user, can_access_student
 from backend.policies import (
     is_supervisor,
@@ -7,6 +7,7 @@ from backend.policies import (
     supervised_student_ids,
     visible_project_ids_for,
     can_manage_project,
+    can_view_project,
     serialize_eval,
 )
 
@@ -72,19 +73,36 @@ def create_evaluation():
     student_id = data.get("student")
     if not student_id:
         return jsonify({"error": "Lernende/r muss angegeben werden."}), 400
-    student_id = int(student_id)
+    try:
+        student_id = int(student_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Ungültige/r Lernende/r."}), 400
 
     if not can_access_student(actor, student_id):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
-    supervisor_id = data.get("supervisor") or actor.id
+    participation_id = None
+    if data.get("participation") not in (None, ""):
+        try:
+            participation_id = int(data["participation"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "Ungültige Teilnahme."}), 400
+        participation = db.session.get(Participation, participation_id)
+        if (
+            not participation
+            or participation.project != project.id
+            or participation.student != student_id
+        ):
+            return jsonify({"error": "Ungültige Teilnahme."}), 400
 
     evaluation = Eval(
         project=project.id,
-        participation=int(data["participation"]) if data.get("participation") else None,
+        participation=participation_id,
         goal=goal,
         student=student_id,
-        supervisor=int(supervisor_id) if supervisor_id else None,
+        # The acting supervisor is always the recorded author; never trust a
+        # client-supplied user ID here.
+        supervisor=actor.id,
         planning_text=(data.get("planning_text") or "").strip(),
         eval_text=(data.get("eval_text") or "").strip(),
         eval_released=bool(data.get("eval_released", False)),
@@ -109,7 +127,9 @@ def update_evaluation(eval_id):
     if not evaluation:
         return jsonify({"error": "Bewertung nicht gefunden."}), 404
 
-    if not can_access_student(actor, evaluation.student):
+    if not can_access_student(actor, evaluation.student) or not can_view_project(
+        actor, evaluation.project_rel
+    ):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     data = request.get_json(silent=True) or {}
@@ -118,18 +138,32 @@ def update_evaluation(eval_id):
     if "planning_text" in data:
         evaluation.planning_text = (data.get("planning_text") or "").strip()
     if "participation" in data:
-        evaluation.participation = (
-            int(data["participation"]) if data.get("participation") else None
-        )
+        raw_participation = data.get("participation")
+        if raw_participation in (None, ""):
+            evaluation.participation = None
+        else:
+            try:
+                participation_id = int(raw_participation)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Ungültige Teilnahme."}), 400
+            participation = db.session.get(Participation, participation_id)
+            if (
+                not participation
+                or participation.project != evaluation.project
+                or participation.student != evaluation.student
+            ):
+                return jsonify({"error": "Ungültige Teilnahme."}), 400
+            evaluation.participation = participation_id
     if "eval_text" in data:
         evaluation.eval_text = (data.get("eval_text") or "").strip()
     if "eval_released" in data:
         evaluation.eval_released = bool(data.get("eval_released"))
-    if "supervisor" in data:
-        evaluation.supervisor = (
-            int(data["supervisor"]) if data["supervisor"] else actor.id
-        )
-    elif not evaluation.supervisor:
+    # The recorded supervisor is never taken from client input.
+    if (
+        not evaluation.supervisor
+        or not evaluation.supervisor_user
+        or evaluation.supervisor_user.company != actor.company
+    ):
         evaluation.supervisor = actor.id
 
     db.session.commit()
@@ -149,7 +183,9 @@ def delete_evaluation(eval_id):
     if not evaluation:
         return jsonify({"error": "Bewertung nicht gefunden."}), 404
 
-    if not can_access_student(actor, evaluation.student):
+    if not can_access_student(actor, evaluation.student) or not can_view_project(
+        actor, evaluation.project_rel
+    ):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     db.session.delete(evaluation)

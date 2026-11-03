@@ -7,6 +7,8 @@ from backend.policies import (
     supervised_student_ids,
     visible_project_ids_for,
     can_view_project,
+    can_participate_in_project,
+    serialize_participation,
 )
 
 bp = Blueprint("api_implementation", __name__, url_prefix="/api/implementation")
@@ -43,7 +45,9 @@ def list_implementations():
         query = query.filter_by(project=project_id)
 
     items = query.order_by(Participation.id.desc()).all()
-    return jsonify({"data": [item.to_dict() for item in items]})
+    return jsonify(
+        {"data": [serialize_participation(item, actor) for item in items]}
+    )
 
 
 @bp.route("", methods=["POST"])
@@ -64,7 +68,11 @@ def create_implementation():
         return jsonify({"error": "Projekt und Titel sind erforderlich."}), 400
 
     project = db.session.get(Project, int(project_id))
-    if not project or not can_view_project(actor, project):
+    if (
+        not project
+        or not can_view_project(actor, project)
+        or not can_participate_in_project(actor, project)
+    ):
         return jsonify({"error": "Projekt nicht gefunden oder nicht freigegeben."}), 404
 
     part = Participation(
@@ -77,7 +85,7 @@ def create_implementation():
     )
     db.session.add(part)
     db.session.commit()
-    return jsonify({"data": part.to_dict()}), 201
+    return jsonify({"data": serialize_participation(part, actor)}), 201
 
 
 @bp.route("/<int:part_id>", methods=["PUT"])
@@ -124,11 +132,16 @@ def update_implementation(part_id):
             ), 403
         if "is_done" in data:
             part.is_done = bool(data.get("is_done"))
-        if "supervisor" in data:
-            part.supervisor = int(data["supervisor"]) if data["supervisor"] else None
+        # The recorded supervisor is never taken from client input.
+        if (
+            not part.supervisor
+            or not part.supervisor_user
+            or part.supervisor_user.company != actor.company
+        ):
+            part.supervisor = actor.id
 
     db.session.commit()
-    return jsonify({"data": part.to_dict()})
+    return jsonify({"data": serialize_participation(part, actor)})
 
 
 @bp.route("/<int:part_id>", methods=["DELETE"])

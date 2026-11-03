@@ -82,7 +82,7 @@ const phase3Partial = computed(
           </div>
         </div>
 
-        <div v-if="ctx.auth.isTrainer" class="flex-gap">
+        <div v-if="project.can_manage" class="flex-gap">
           <EditButton
             label="Teilprojekt hinzufügen"
             icon="folder-plus"
@@ -118,7 +118,7 @@ const phase3Partial = computed(
                 </div>
               </div>
             </div>
-            <div v-if="ctx.auth.isTrainer" class="flex-gap">
+            <div v-if="project.can_manage" class="flex-gap">
               <EditButton
                 :label="
                   project.planning_released
@@ -157,7 +157,7 @@ const phase3Partial = computed(
                 <li v-for="(g, idx) in goals" :key="idx" class="goal-item">
                   <span>🎯 {{ g }}</span>
                   <EditButton
-                    v-if="ctx.auth.isTrainer"
+                    v-if="project.can_manage"
                     label="Für Lernende/n planen"
                     icon="plus"
                     @click="ctx.openNewEval(project, g, 'planning')"
@@ -179,7 +179,7 @@ const phase3Partial = computed(
                     <strong>Planungsvorgabe:</strong> {{ ev.planning_text || 'Keine spezifische Vorgabe notiert.' }}
                   </div>
                 </div>
-                <div v-if="ctx.auth.isTrainer" class="flex-gap">
+                <div v-if="project.can_manage" class="flex-gap">
                   <EditButton
                     label="Planung anpassen"
                     icon="edit"
@@ -245,7 +245,10 @@ const phase3Partial = computed(
 
                 <div class="flex-gap">
                   <EditButton
-                    v-if="ctx.auth.isTrainer || !item.is_done"
+                    v-if="
+                      (ctx.auth.isTrainer && project.can_manage) ||
+                      (ctx.auth.isStudent && !item.is_done)
+                    "
                     :label="
                       item.is_done
                         ? 'Wieder öffnen'
@@ -287,7 +290,7 @@ const phase3Partial = computed(
               </div>
             </div>
             <EditButton
-              v-if="ctx.auth.isTrainer"
+              v-if="project.can_manage"
               label="Bewertung erfassen"
               icon="plus"
               variant="primary"
@@ -368,7 +371,7 @@ const phase3Partial = computed(
                   </div>
                 </div>
 
-                <div v-if="ctx.auth.isTrainer" class="flex-gap">
+                <div v-if="project.can_manage" class="flex-gap">
                   <EditButton
                     :label="
                       ev.eval_released
@@ -400,7 +403,7 @@ const phase3Partial = computed(
 
       <!-- Optional Subprojects (Teilprojekte) -->
       <div
-        v-if="subprojects.length > 0 || ctx.auth.isTrainer"
+        v-if="subprojects.length > 0 || project.can_manage"
         class="subprojects-section"
       >
         <div class="flex-between" style="margin-bottom: var(--space-3)">
@@ -409,7 +412,7 @@ const phase3Partial = computed(
             <span class="text-muted">Untergeordnete Teilaufgaben oder Ausbildungsabschnitte</span>
           </div>
           <EditButton
-            v-if="ctx.auth.isTrainer"
+            v-if="project.can_manage"
             label="Teilprojekt hinzufügen"
             icon="folder-plus"
             variant="primary"

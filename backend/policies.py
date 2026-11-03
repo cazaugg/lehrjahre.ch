@@ -136,10 +136,39 @@ def _company_projects_by_id(company: str) -> dict[int, Project]:
     company_user_ids = [
         u.id for u in User.query.filter_by(company=company).all()
     ]
-    projects = Project.query.filter(
-        (Project.author.in_(company_user_ids)) | (Project.author.is_(None))
-    ).all()
+    if not company_user_ids:
+        return {}
+    # Every visible project must have an author in the actor's company.
+    # Authorless projects are not accessible to anyone (see delete_user, which
+    # reassigns projects before deleting their author).
+    projects = Project.query.filter(Project.author.in_(company_user_ids)).all()
     return {p.id: p for p in projects}
+
+
+def _direct_supervisor_project_ids(
+    actor: User | None, proj_map: dict[int, Project]
+) -> set[int]:
+    """Projects a supervisor may manage: their own and their learners'."""
+    if not is_supervisor(actor):
+        return set()
+
+    direct_ids = {pid for pid, p in proj_map.items() if p.author == actor.id}
+    sub_ids = supervised_student_ids(actor)
+    if sub_ids:
+        part_pids = {
+            r.project
+            for r in Participation.query.filter(
+                Participation.student.in_(sub_ids)
+            ).all()
+            if r.project in proj_map
+        }
+        eval_pids = {
+            r.project
+            for r in Eval.query.filter(Eval.student.in_(sub_ids)).all()
+            if r.project in proj_map
+        }
+        direct_ids |= part_pids | eval_pids
+    return direct_ids
 
 
 def visible_project_ids_for(actor: User | None) -> set[int]:
@@ -150,6 +179,8 @@ def visible_project_ids_for(actor: User | None) -> set[int]:
       associated child/parent projects in the tree.
     - Lernende: Only projects where the student participates (via Participation
       or Eval) AND `planning_released == True` (plus released parent containers).
+
+    Visibility is broader than management; see `can_manage_project`.
     """
     if not actor:
         return set()
@@ -159,24 +190,7 @@ def visible_project_ids_for(actor: User | None) -> set[int]:
         return set()
 
     if is_supervisor(actor):
-        sub_ids = supervised_student_ids(actor)
-        direct_ids = {
-            pid for pid, p in proj_map.items() if p.author == actor.id
-        }
-        if sub_ids:
-            part_pids = {
-                r.project
-                for r in Participation.query.filter(
-                    Participation.student.in_(sub_ids)
-                ).all()
-                if r.project in proj_map
-            }
-            eval_pids = {
-                r.project
-                for r in Eval.query.filter(Eval.student.in_(sub_ids)).all()
-                if r.project in proj_map
-            }
-            direct_ids |= part_pids | eval_pids
+        direct_ids = _direct_supervisor_project_ids(actor, proj_map)
 
         # Include descendants of visible projects and ancestors up to root
         visible = set(direct_ids)
@@ -230,11 +244,52 @@ def can_view_project(actor: User | None, project: Project | None) -> bool:
     return project.id in visible_project_ids_for(actor)
 
 
+def manageable_project_ids_for(actor: User | None) -> set[int]:
+    if not is_supervisor(actor):
+        return set()
+    proj_map = _company_projects_by_id(actor.company)
+    return _direct_supervisor_project_ids(actor, proj_map)
+
+
 def can_manage_project(actor: User | None, project: Project | None) -> bool:
-    """Only supervisors with access to the project can edit/delete it."""
+    """
+    Supervisors may edit/delete only their own projects and projects their
+    subordinate learners participate in. Parent/child context projects are
+    visible but not automatically manageable.
+    """
     if not is_supervisor(actor) or not project:
         return False
-    return project.id in visible_project_ids_for(actor)
+    proj_map = _company_projects_by_id(actor.company)
+    if project.id not in proj_map:
+        return False
+    return project.id in _direct_supervisor_project_ids(actor, proj_map)
+
+
+def serialize_project(
+    project: Project,
+    actor: User | None,
+    manageable_ids: set[int] | None = None,
+) -> dict:
+    data = project.to_dict()
+    if manageable_ids is None:
+        data["can_manage"] = can_manage_project(actor, project)
+    else:
+        data["can_manage"] = project.id in manageable_ids
+    return data
+
+
+def can_participate_in_project(actor: User | None, project: Project | None) -> bool:
+    """Students may report only on projects they are directly assigned to."""
+    if not is_student(actor) or not project:
+        return False
+    if project.id not in _company_projects_by_id(actor.company):
+        return False
+    return bool(
+        Participation.query.filter_by(
+            student=actor.id, project=project.id
+        ).first()
+        or Eval.query.filter_by(student=actor.id, project=project.id).first()
+    )
 
 
 def serialize_eval(evaluation: Eval, actor: User | None) -> dict:
@@ -242,6 +297,27 @@ def serialize_eval(evaluation: Eval, actor: User | None) -> dict:
     data = evaluation.to_dict()
     if is_student(actor) and not evaluation.eval_released:
         data["eval_text"] = ""
+    # Never expose a supervisor from another company, even for legacy rows.
+    if (
+        evaluation.supervisor_user
+        and actor
+        and evaluation.supervisor_user.company != actor.company
+    ):
+        data["supervisor"] = None
+        data["supervisor_name"] = ""
+    return data
+
+
+def serialize_participation(participation: Participation, actor: User | None) -> dict:
+    """Serialize a Participation without leaking foreign-company supervisors."""
+    data = participation.to_dict()
+    if (
+        participation.supervisor_user
+        and actor
+        and participation.supervisor_user.company != actor.company
+    ):
+        data["supervisor"] = None
+        data["supervisor_name"] = ""
     return data
 
 
@@ -339,8 +415,11 @@ def can_delete_document(actor: User | None, doc: Documents | None) -> bool:
         return doc.owner == actor.id or is_supervisor_of(actor, doc.owner)
 
     if doc.type in {"zeugnis", "kursnachweis"}:
-        # Supervisors can delete; students can only create & edit (no delete)
-        return is_supervisor_of(actor, doc.owner)
+        # Supervisors can delete their own and subordinate students' documents;
+        # students can only create & edit (no delete).
+        return is_supervisor(actor) and (
+            doc.owner == actor.id or is_supervisor_of(actor, doc.owner)
+        )
 
     if doc.type in {"ausbildungsgespraech", "vertrag", "bewerbung"}:
         # Only supervisors can delete for subordinate students
