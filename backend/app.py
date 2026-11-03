@@ -2,7 +2,7 @@ import os
 from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from backend.config import Config, DATA_DIR, DOCUMENTS_DIR
-from backend.models import db
+from backend.models import db, ensure_schema_columns
 from backend.auth import verify_csrf
 from backend.routes.auth_routes import bp as auth_bp
 from backend.routes.user_routes import bp as user_bp
@@ -61,6 +61,7 @@ def create_app(config_overrides: dict | None = None) -> Flask:
 
     with app.app_context():
         db.create_all()
+        ensure_schema_columns()
 
     return app
 

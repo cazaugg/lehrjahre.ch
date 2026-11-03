@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
-from backend.models import db, Knowledge, Documents, User, UserRelation
+from backend.models import db, Knowledge, Documents
 from backend.auth import login_required, get_current_user
+from backend.policies import visible_knowledge_owner_ids
 from backend.storage import save_text_document, read_text_document, delete_stored_file
 
 bp = Blueprint("api_knowledge", __name__, url_prefix="/api/knowledge")
@@ -9,15 +10,7 @@ bp = Blueprint("api_knowledge", __name__, url_prefix="/api/knowledge")
 
 def visible_owner_ids(actor):
     """Return the user IDs whose knowledge entries the actor may read."""
-    if actor.role == "lernender":
-        return {actor.id}
-    if actor.job_title in {"Administrator", "HR / Rekrutierung"}:
-        return {u.id for u in User.query.filter_by(company=actor.company).all()}
-    student_ids = {
-        relation.student
-        for relation in UserRelation.query.filter_by(supervisor=actor.id).all()
-    }
-    return {actor.id} | student_ids
+    return visible_knowledge_owner_ids(actor)
 
 
 def can_view_node(actor, node):

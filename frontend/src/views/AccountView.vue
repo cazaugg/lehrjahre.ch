@@ -221,7 +221,7 @@ async function uploadProfilePhoto() {
       <div class="card-header">
         <h2>Kontaktangaben</h2>
         <EditButton
-          v-if="!editingContacts"
+          v-if="auth.isTrainer && !editingContacts"
           label="Kontaktangaben bearbeiten"
           @click="startEditContacts"
         />

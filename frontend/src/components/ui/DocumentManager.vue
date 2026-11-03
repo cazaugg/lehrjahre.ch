@@ -44,6 +44,98 @@ const types = computed(() => {
 
 const hasMultipleTypes = computed(() => types.value.length > 1)
 
+const canCreate = computed(() => {
+  const activeTypes = types.value
+  if (activeTypes.includes('lernjournal')) {
+    return auth.isStudent
+  }
+  if (
+    activeTypes.every((t) =>
+      ['ausbildungsgespraech', 'vertrag', 'bewerbung'].includes(t)
+    )
+  ) {
+    return auth.isTrainer
+  }
+  return true
+})
+
+function canEditDoc(doc) {
+  if (!doc) return false
+  if (doc.is_template) return auth.isTrainer
+  if (doc.type === 'lernjournal') {
+    return auth.isStudent && doc.owner === auth.user?.id
+  }
+  if (['ausbildungsgespraech', 'vertrag', 'bewerbung'].includes(doc.type)) {
+    return auth.isTrainer
+  }
+  if (['zeugnis', 'kursnachweis'].includes(doc.type)) {
+    return auth.isTrainer || doc.owner === auth.user?.id
+  }
+  return auth.isTrainer || doc.owner === auth.user?.id
+}
+
+function canDeleteDoc(doc) {
+  if (!doc) return false
+  if (doc.is_template) return auth.isTrainer
+  if (doc.type === 'lernjournal') {
+    return auth.isStudent && doc.owner === auth.user?.id
+  }
+  if (
+    ['zeugnis', 'kursnachweis', 'ausbildungsgespraech', 'vertrag', 'bewerbung'].includes(
+      doc.type
+    )
+  ) {
+    return auth.isTrainer
+  }
+  return auth.isTrainer || doc.owner === auth.user?.id
+}
+
+// Feedback state for Lernjournal Rückmeldung (Supervisor)
+const editingFeedbackDocId = ref(null)
+const feedbackDraft = ref('')
+
+function startEditFeedback(doc) {
+  expandedIds.value[doc.id] = true
+  editingFeedbackDocId.value = doc.id
+  feedbackDraft.value = doc.feedback || ''
+}
+
+function cancelEditFeedback() {
+  editingFeedbackDocId.value = null
+  feedbackDraft.value = ''
+}
+
+async function saveFeedback(doc) {
+  error.value = ''
+  try {
+    await apiFetch(`/api/documents/${doc.id}`, {
+      method: 'PUT',
+      body: { feedback: feedbackDraft.value }
+    })
+    editingFeedbackDocId.value = null
+    await loadDocuments()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+async function deleteFeedback(doc) {
+  if (!confirm('Rückmeldung zu diesem Lernjournal-Eintrag wirklich löschen?')) return
+  error.value = ''
+  try {
+    await apiFetch(`/api/documents/${doc.id}`, {
+      method: 'PUT',
+      body: { feedback: '' }
+    })
+    if (editingFeedbackDocId.value === doc.id) {
+      editingFeedbackDocId.value = null
+    }
+    await loadDocuments()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
 function typeLabel(type) {
   return documentTypeLabels[type] || type
 }
@@ -402,7 +494,7 @@ function isPdf(doc) {
           <h1 class="page-title">{{ title }}</h1>
           <p v-if="subtitle" class="page-subtitle">{{ subtitle }}</p>
         </div>
-        <div class="flex-gap">
+        <div v-if="canCreate" class="flex-gap">
           <EditButton
             v-if="!preferTextEditor"
             size="lg"
@@ -442,6 +534,7 @@ function isPdf(doc) {
               {{ typeLabel(tpl.type) }}
             </span>
             <EditButton
+              v-if="canCreate"
               label="Vorlage verwenden"
               icon="copy"
               variant="primary"
@@ -519,6 +612,12 @@ function isPdf(doc) {
                   <span class="badge" :class="doc.is_done ? 'badge-success' : 'badge-warning'">
                     {{ doc.is_done ? 'Abgeschlossen' : 'In Bearbeitung' }}
                   </span>
+                  <span
+                    v-if="doc.type === 'lernjournal' && doc.feedback"
+                    class="badge badge-success"
+                  >
+                    Rückmeldung vorhanden
+                  </span>
                 </div>
                 <div class="text-muted" style="margin-top: 2px">
                   Aktualisiert am {{ formatDate(doc.updated_date) }}
@@ -534,17 +633,27 @@ function isPdf(doc) {
                 :href="`/api/documents/${doc.id}/file`"
               />
               <EditButton
+                v-if="doc.type === 'lernjournal' && auth.isTrainer"
+                :label="doc.feedback ? 'Rückmeldung bearbeiten' : 'Rückmeldung erfassen'"
+                icon="edit"
+                variant="primary"
+                @click="startEditFeedback(doc)"
+              />
+              <EditButton
+                v-if="canEditDoc(doc)"
                 :label="doc.is_done ? 'Als offen markieren' : 'Abschliessen'"
                 :icon="doc.is_done ? 'undo' : 'check'"
                 :variant="doc.is_done ? 'default' : 'success'"
                 @click="toggleDone(doc)"
               />
               <EditButton
+                v-if="canEditDoc(doc)"
                 label="Dokument bearbeiten"
                 icon="edit"
                 @click="openEdit(doc)"
               />
               <EditButton
+                v-if="canDeleteDoc(doc)"
                 label="Dokument löschen"
                 icon="delete"
                 variant="danger"
@@ -575,6 +684,67 @@ function isPdf(doc) {
             />
             <div v-else class="text-muted">
               Binärdatei ({{ doc.filename }}). Klicken Sie oben rechts auf das Öffnen-Symbol, um das Dokument anzusehen.
+            </div>
+
+            <!-- Lernjournal Rückmeldung Section -->
+            <div
+              v-if="doc.type === 'lernjournal'"
+              style="
+                margin-top: var(--space-4);
+                padding-top: var(--space-3);
+                border-top: 1px solid var(--color-border);
+              "
+            >
+              <div class="flex-between" style="margin-bottom: var(--space-2)">
+                <strong>Rückmeldung (Vorgesetzte/r)</strong>
+                <div v-if="auth.isTrainer && editingFeedbackDocId !== doc.id" class="flex-gap">
+                  <EditButton
+                    :label="doc.feedback ? 'Rückmeldung bearbeiten' : 'Rückmeldung erfassen'"
+                    icon="edit"
+                    variant="primary"
+                    show-label
+                    @click="startEditFeedback(doc)"
+                  />
+                  <EditButton
+                    v-if="doc.feedback"
+                    label="Rückmeldung löschen"
+                    icon="delete"
+                    variant="danger"
+                    @click="deleteFeedback(doc)"
+                  />
+                </div>
+              </div>
+
+              <form
+                v-if="auth.isTrainer && editingFeedbackDocId === doc.id"
+                @submit.prevent="saveFeedback(doc)"
+              >
+                <div class="form-group">
+                  <textarea
+                    v-model="feedbackDraft"
+                    class="form-control"
+                    rows="3"
+                    placeholder="Rückmeldung zum Lernjournal-Eintrag verfassen..."
+                  />
+                </div>
+                <div class="flex-gap">
+                  <button type="submit" class="btn btn-primary btn-sm">
+                    Rückmeldung speichern
+                  </button>
+                  <button type="button" class="btn btn-sm" @click="cancelEditFeedback">
+                    Abbrechen
+                  </button>
+                </div>
+              </form>
+              <p
+                v-else-if="doc.feedback"
+                style="margin: 0; white-space: pre-line"
+              >
+                {{ doc.feedback }}
+              </p>
+              <p v-else class="text-muted" style="margin: 0">
+                Noch keine Rückmeldung vorhanden.
+              </p>
             </div>
           </div>
         </div>

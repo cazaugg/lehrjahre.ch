@@ -7,6 +7,7 @@ from backend.auth import (
     get_current_user,
     login_required,
 )
+from backend.policies import serialize_user
 
 bp = Blueprint("api_auth", __name__, url_prefix="/api/auth")
 
@@ -39,7 +40,7 @@ def login():
     return jsonify(
         {
             "data": {
-                "user": user.to_dict(),
+                "user": serialize_user(user, user),
                 "csrf_token": csrf_token,
                 "mem_professions": current_app.config["MEM_PROFESSIONS"],
                 "trainer_functions": current_app.config["TRAINER_FUNCTIONS"],
@@ -64,7 +65,7 @@ def me():
     return jsonify(
         {
             "data": {
-                "user": user.to_dict(),
+                "user": serialize_user(user, user),
                 "csrf_token": ensure_csrf_token(),
                 "mem_professions": current_app.config["MEM_PROFESSIONS"],
                 "trainer_functions": current_app.config["TRAINER_FUNCTIONS"],

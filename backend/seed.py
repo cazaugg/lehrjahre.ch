@@ -942,6 +942,7 @@ def seed_database():
             ),
             start_date=date(2024, 8, 12),
             due_date=date(2025, 1, 31),
+            planning_released=True,
         )
         db.session.add(root_project)
         db.session.flush()
@@ -960,6 +961,7 @@ def seed_database():
             ),
             start_date=date(2024, 9, 2),
             due_date=date(2024, 10, 18),
+            planning_released=True,
         )
 
         sub_project2 = Project(
@@ -976,6 +978,7 @@ def seed_database():
             ),
             start_date=date(2025, 2, 3),
             due_date=date(2025, 7, 18),
+            planning_released=True,
         )
         db.session.add_all([sub_project1, sub_project2])
         db.session.flush()
@@ -1009,6 +1012,7 @@ def seed_database():
             supervisor=fach_user.id,
             planning_text="Sauberes Entgraten nach jedem Aufspannen und Kontrolle der Auflagefläche mit Messuhr.",
             eval_text="Sehr exakte Arbeitsweise. Prüfprotokoll zeigt Abweichungen von max. 0.01 mm. Ziel vollumfänglich erreicht (A).",
+            eval_released=True,
         )
         eval2 = Eval(
             project=sub_project2.id,
@@ -1018,6 +1022,7 @@ def seed_database():
             supervisor=admin.id,
             planning_text="Checkliste für Werkzeugvermessung verwenden und Trockenlauf mit Vorschubreduktion durchführen.",
             eval_text="",
+            eval_released=False,
         )
         db.session.add_all([eval1, eval2])
 
@@ -1080,6 +1085,7 @@ def seed_database():
             is_template=False,
             updated_date=datetime.now(timezone.utc),
             is_done=True,
+            feedback="Gute Reflexion zur Passfedernut. Bitte beim nächsten Mal auch die gewählten Schnittdaten (n, vf) festhalten.",
         )
 
         gespraech_md = (

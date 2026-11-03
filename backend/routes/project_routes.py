@@ -1,8 +1,13 @@
 import json
 from datetime import date
 from flask import Blueprint, request, jsonify
-from backend.models import db, Project, User
+from backend.models import db, Project
 from backend.auth import login_required, role_required, get_current_user
+from backend.policies import (
+    visible_project_ids_for,
+    can_view_project,
+    can_manage_project,
+)
 
 bp = Blueprint("api_project", __name__, url_prefix="/api/project")
 
@@ -34,14 +39,11 @@ def serialize_goals(goals_input) -> str:
 @login_required
 def list_projects():
     actor = get_current_user()
-    # Scope projects to authors in the same company or public templates
-    company_user_ids = [
-        u.id for u in User.query.filter_by(company=actor.company).all()
-    ]
+    visible_ids = visible_project_ids_for(actor)
+    if not visible_ids:
+        return jsonify({"data": []})
     projects = (
-        Project.query.filter(
-            (Project.author.in_(company_user_ids)) | (Project.author.is_(None))
-        )
+        Project.query.filter(Project.id.in_(visible_ids))
         .order_by(Project.start_date.desc().nullslast(), Project.id.desc())
         .all()
     )
@@ -51,8 +53,9 @@ def list_projects():
 @bp.route("/<int:project_id>", methods=["GET"])
 @login_required
 def get_project(project_id):
+    actor = get_current_user()
     project = db.session.get(Project, project_id)
-    if not project:
+    if not project or not can_view_project(actor, project):
         return jsonify({"error": "Projekt nicht gefunden."}), 404
     return jsonify({"data": project.to_dict()})
 
@@ -69,8 +72,9 @@ def create_project():
     parent_id = data.get("parent_project")
     if parent_id:
         parent = db.session.get(Project, int(parent_id))
-        if not parent:
+        if not parent or not can_manage_project(actor, parent):
             return jsonify({"error": "Übergeordnetes Projekt nicht gefunden."}), 400
+        parent_id = parent.id
     else:
         parent_id = None
 
@@ -82,6 +86,7 @@ def create_project():
         goals=serialize_goals(data.get("goals")),
         start_date=parse_date(data.get("start_date")),
         due_date=parse_date(data.get("due_date")),
+        planning_released=bool(data.get("planning_released", False)),
     )
     db.session.add(project)
     db.session.commit()
@@ -91,9 +96,12 @@ def create_project():
 @bp.route("/<int:project_id>", methods=["PUT"])
 @role_required("ausbildner")
 def update_project(project_id):
+    actor = get_current_user()
     project = db.session.get(Project, project_id)
     if not project:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
+    if not can_manage_project(actor, project):
+        return jsonify({"error": "Keine Berechtigung für dieses Projekt."}), 403
 
     data = request.get_json(silent=True) or {}
     if "title" in data and data["title"].strip():
@@ -103,7 +111,10 @@ def update_project(project_id):
     if "parent_project" in data:
         parent_id = data.get("parent_project")
         if parent_id and int(parent_id) != project.id:
-            project.parent_project = int(parent_id)
+            parent = db.session.get(Project, int(parent_id))
+            if not parent or not can_manage_project(actor, parent):
+                return jsonify({"error": "Ungültiges übergeordnetes Projekt."}), 400
+            project.parent_project = parent.id
         else:
             project.parent_project = None
     if "goals" in data:
@@ -112,6 +123,8 @@ def update_project(project_id):
         project.start_date = parse_date(data.get("start_date"))
     if "due_date" in data:
         project.due_date = parse_date(data.get("due_date"))
+    if "planning_released" in data:
+        project.planning_released = bool(data.get("planning_released"))
 
     db.session.commit()
     return jsonify({"data": project.to_dict()})
@@ -120,9 +133,12 @@ def update_project(project_id):
 @bp.route("/<int:project_id>", methods=["DELETE"])
 @role_required("ausbildner")
 def delete_project(project_id):
+    actor = get_current_user()
     project = db.session.get(Project, project_id)
     if not project:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
+    if not can_manage_project(actor, project):
+        return jsonify({"error": "Keine Berechtigung für dieses Projekt."}), 403
 
     db.session.delete(project)
     db.session.commit()

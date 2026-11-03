@@ -312,8 +312,8 @@ function formatDate(d) {
               {{ supervisorsForStudent(person.id).length }} Ausbildner
             </span>
             <EditButton
-              v-if="person.role === 'lernender' && auth.isAdminOrHr"
-              label="Stammdaten bearbeiten"
+              v-if="person.can_edit_contacts"
+              label="Kontaktdaten / Stammdaten bearbeiten"
               icon="edit"
               @click="startEditPerson(person)"
             />
@@ -322,48 +322,121 @@ function formatDate(d) {
 
         <div v-if="expandedIds[person.id]" class="collapsible-body">
           <!-- Ausbildner -->
-          <div v-if="person.role === 'ausbildner'" class="contact-grid">
-            <div class="contact-card">
-              <h4>Betrieb ({{ person.company }})</h4>
-              <div class="text-muted">{{ person.company_address || '–' }}</div>
-              <div>
-                <a v-if="person.company_email" :href="`mailto:${person.company_email}`">
-                  {{ person.company_email }}
-                </a>
-              </div>
-              <div class="text-muted">{{ person.company_phone || '–' }}</div>
-            </div>
+          <template v-if="person.role === 'ausbildner'">
+            <form
+              v-if="editingPersonId === person.id"
+              @submit.prevent="saveApprenticeProfile"
+            >
+              <div class="grid-3">
+                <div class="contact-card">
+                  <h4>Privat</h4>
+                  <div class="form-group">
+                    <label class="form-label">Adresse</label>
+                    <input v-model="profileDraft.private_address" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">E-Mail</label>
+                    <input v-model="profileDraft.private_email" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Telefon</label>
+                    <input v-model="profileDraft.private_phone" class="form-control" />
+                  </div>
+                </div>
 
-            <div class="contact-card">
-              <h4>Berufsfachschule / ÜK-Zentrum</h4>
-              <div class="text-muted">{{ person.school_address || '–' }}</div>
-              <div>
-                <a v-if="person.school_email" :href="`mailto:${person.school_email}`">
-                  {{ person.school_email }}
-                </a>
-              </div>
-              <div class="text-muted">{{ person.school_phone || '–' }}</div>
-            </div>
+                <div class="contact-card">
+                  <h4>Berufsfachschule / ÜK-Zentrum</h4>
+                  <div class="form-group">
+                    <label class="form-label">Schule & Adresse</label>
+                    <input v-model="profileDraft.school_address" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Schul-E-Mail</label>
+                    <input v-model="profileDraft.school_email" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Schul-Telefon</label>
+                    <input v-model="profileDraft.school_phone" class="form-control" />
+                  </div>
+                </div>
 
-            <div class="contact-card">
-              <h4>Betreute Lernende</h4>
-              <div
-                v-if="studentsForSupervisor(person.id).length === 0"
-                class="text-muted"
-              >
-                Keine direkt zugewiesenen Lernenden.
+                <div class="contact-card">
+                  <h4>Betrieb ({{ person.company }})</h4>
+                  <div class="form-group">
+                    <label class="form-label">Standort / Adresse</label>
+                    <input v-model="profileDraft.company_address" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Firmen-E-Mail</label>
+                    <input v-model="profileDraft.company_email" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Firmen-Telefon</label>
+                    <input v-model="profileDraft.company_phone" class="form-control" />
+                  </div>
+                </div>
               </div>
-              <div v-else class="flex-gap">
-                <span
-                  v-for="rel in studentsForSupervisor(person.id)"
-                  :key="rel.id"
-                  class="badge badge-info"
+
+              <div class="flex-gap" style="margin-top: var(--space-4)">
+                <button type="submit" class="btn btn-primary">Speichern</button>
+                <button type="button" class="btn" @click="cancelEditPerson">Abbrechen</button>
+              </div>
+            </form>
+
+            <div v-else class="contact-grid">
+              <div v-if="person.can_view_private" class="contact-card">
+                <h4>Privat</h4>
+                <div class="text-muted">{{ person.private_address || '–' }}</div>
+                <div>
+                  <a v-if="person.private_email" :href="`mailto:${person.private_email}`">
+                    {{ person.private_email }}
+                  </a>
+                </div>
+                <div class="text-muted">{{ person.private_phone || '–' }}</div>
+              </div>
+
+              <div class="contact-card">
+                <h4>Betrieb ({{ person.company }})</h4>
+                <div class="text-muted">{{ person.company_address || '–' }}</div>
+                <div>
+                  <a v-if="person.company_email" :href="`mailto:${person.company_email}`">
+                    {{ person.company_email }}
+                  </a>
+                </div>
+                <div class="text-muted">{{ person.company_phone || '–' }}</div>
+              </div>
+
+              <div class="contact-card">
+                <h4>Berufsfachschule / ÜK-Zentrum</h4>
+                <div class="text-muted">{{ person.school_address || '–' }}</div>
+                <div>
+                  <a v-if="person.school_email" :href="`mailto:${person.school_email}`">
+                    {{ person.school_email }}
+                  </a>
+                </div>
+                <div class="text-muted">{{ person.school_phone || '–' }}</div>
+              </div>
+
+              <div class="contact-card">
+                <h4>Betreute Lernende</h4>
+                <div
+                  v-if="studentsForSupervisor(person.id).length === 0"
+                  class="text-muted"
                 >
-                  {{ rel.student_name }}
-                </span>
+                  Keine direkt zugewiesenen Lernenden.
+                </div>
+                <div v-else class="flex-gap">
+                  <span
+                    v-for="rel in studentsForSupervisor(person.id)"
+                    :key="rel.id"
+                    class="badge badge-info"
+                  >
+                    {{ rel.student_name }}
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
+          </template>
 
           <!-- Lernende/r -->
           <template v-else>
@@ -488,8 +561,8 @@ function formatDate(d) {
                 </div>
               </div>
 
-              <div class="grid-3" style="margin-top: var(--space-3)">
-                <div class="contact-card">
+              <div class="contact-grid" style="margin-top: var(--space-3)">
+                <div v-if="person.can_view_private" class="contact-card">
                   <h4>Privat</h4>
                   <div class="detail-item">
                     <div class="detail-label">Adresse</div>
@@ -589,7 +662,12 @@ function formatDate(d) {
               </div>
             </div>
 
-            <PersonDocuments :person-id="person.id" role="lernender" />
+            <PersonDocuments
+              v-if="person.id === auth.user?.id || person.is_subordinate"
+              :person-id="person.id"
+              :can-edit="Boolean(person.is_subordinate && auth.isTrainer)"
+              role="lernender"
+            />
           </template>
         </div>
       </div>

@@ -139,6 +139,7 @@ class Project(db.Model):
     goals = db.Column(db.Text, default="[]")  # Stored as JSON list of strings/objects
     start_date = db.Column(db.Date, nullable=True)
     due_date = db.Column(db.Date, nullable=True)
+    planning_released = db.Column(db.Boolean, default=False, nullable=False)
 
     author_user = db.relationship("User", foreign_keys=[author], lazy="joined")
 
@@ -166,6 +167,7 @@ class Project(db.Model):
             "goals": self.parsed_goals(),
             "start_date": self.start_date.isoformat() if self.start_date else None,
             "due_date": self.due_date.isoformat() if self.due_date else None,
+            "planning_released": bool(self.planning_released),
         }
 
 
@@ -234,6 +236,7 @@ class Eval(db.Model):
     )
     planning_text = db.Column(db.Text, default="")
     eval_text = db.Column(db.Text, default="")
+    eval_released = db.Column(db.Boolean, default=False, nullable=False)
 
     student_user = db.relationship("User", foreign_keys=[student], lazy="joined")
     supervisor_user = db.relationship("User", foreign_keys=[supervisor], lazy="joined")
@@ -260,6 +263,7 @@ class Eval(db.Model):
             ),
             "planning_text": self.planning_text or "",
             "eval_text": self.eval_text or "",
+            "eval_released": bool(self.eval_released),
         }
 
 
@@ -324,6 +328,7 @@ class Documents(db.Model):
         db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
     is_done = db.Column(db.Boolean, default=False, nullable=False)
+    feedback = db.Column(db.Text, default="")
 
     owner_user = db.relationship("User", foreign_keys=[owner], lazy="joined")
     author_user = db.relationship("User", foreign_keys=[author], lazy="joined")
@@ -352,6 +357,7 @@ class Documents(db.Model):
                 self.updated_date.isoformat() if self.updated_date else None
             ),
             "is_done": bool(self.is_done),
+            "feedback": self.feedback or "",
         }
 
 
@@ -394,3 +400,24 @@ class Knowledge(db.Model):
             "author": doc.author if doc else None,
             "author_name": author_name,
         }
+
+
+def ensure_schema_columns():
+    """Ensure newly added columns exist on pre-existing SQLite databases."""
+    migrations = [
+        ("project", "planning_released", "BOOLEAN NOT NULL DEFAULT 1"),
+        ("eval", "eval_released", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("documents", "feedback", "TEXT DEFAULT ''"),
+    ]
+    conn = db.engine.raw_connection()
+    try:
+        cursor = conn.cursor()
+        for table, column, col_def in migrations:
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            if column not in existing_cols:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()

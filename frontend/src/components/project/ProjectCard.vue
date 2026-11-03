@@ -41,6 +41,13 @@ const phase3Partial = computed(
           <div class="flex-gap">
             <strong style="font-size: 1rem">{{ project.title }}</strong>
             <span v-if="depth > 0" class="badge badge-info">Teilprojekt</span>
+            <span
+              v-if="ctx.auth.isTrainer"
+              class="badge"
+              :class="project.planning_released ? 'badge-success' : 'badge-warning'"
+            >
+              {{ project.planning_released ? 'Planung freigegeben' : 'Planung nicht freigegeben' }}
+            </span>
           </div>
           <div class="text-muted" style="margin-top: 2px">
             Zeitraum: {{ ctx.formatDate(project.start_date) }} bis
@@ -112,6 +119,17 @@ const phase3Partial = computed(
               </div>
             </div>
             <div v-if="ctx.auth.isTrainer" class="flex-gap">
+              <EditButton
+                :label="
+                  project.planning_released
+                    ? 'Freigabe der Planung zurückziehen'
+                    : 'Planung freigeben'
+                "
+                :icon="project.planning_released ? 'undo' : 'check'"
+                :variant="project.planning_released ? 'default' : 'success'"
+                show-label
+                @click="ctx.togglePlanningReleased(project)"
+              />
               <EditButton
                 label="Zielplanung für Lernende/n hinzufügen"
                 icon="plus"
@@ -186,6 +204,7 @@ const phase3Partial = computed(
               </div>
             </div>
             <EditButton
+              v-if="ctx.auth.isStudent"
               label="Arbeitsbericht erfassen"
               icon="plus"
               variant="primary"
@@ -207,7 +226,7 @@ const phase3Partial = computed(
                       class="badge"
                       :class="item.is_done ? 'badge-success' : 'badge-warning'"
                     >
-                      {{ item.is_done ? 'Abgeschlossen' : 'In Arbeit' }}
+                      {{ item.is_done ? 'Abgegeben / Abgeschlossen' : 'In Arbeit' }}
                     </span>
                   </div>
                   <div v-if="item.text" style="margin: 8px 0">
@@ -226,17 +245,24 @@ const phase3Partial = computed(
 
                 <div class="flex-gap">
                   <EditButton
-                    :label="item.is_done ? 'Wieder öffnen' : 'Als erledigt markieren'"
+                    v-if="ctx.auth.isTrainer || !item.is_done"
+                    :label="
+                      item.is_done
+                        ? 'Wieder öffnen'
+                        : 'Projekt abgeben / abschliessen'
+                    "
                     :icon="item.is_done ? 'undo' : 'check'"
                     :variant="item.is_done ? 'default' : 'success'"
                     @click="ctx.toggleImplDone(item)"
                   />
                   <EditButton
+                    v-if="ctx.auth.isStudent && !item.is_done"
                     label="Arbeitsbericht bearbeiten"
                     icon="edit"
                     @click="ctx.openEditImpl(item)"
                   />
                   <EditButton
+                    v-if="ctx.auth.isStudent && !item.is_done"
                     label="Arbeitsbericht löschen"
                     icon="delete"
                     variant="danger"
@@ -278,17 +304,43 @@ const phase3Partial = computed(
                 v-for="ev in evals"
                 :key="'eval-' + ev.id"
                 class="item-row"
-                :class="{ 'evaluated-row': Boolean(ev.eval_text) }"
+                :class="{
+                  'evaluated-row': Boolean(
+                    ev.eval_text && (ctx.auth.isTrainer || ev.eval_released)
+                  )
+                }"
               >
                 <div style="flex: 1">
                   <div class="flex-gap">
                     <strong>{{ ev.goal }}</strong>
                     <span class="badge badge-info">{{ ev.student_name }}</span>
                     <span
+                      v-if="ctx.auth.isTrainer"
                       class="badge"
-                      :class="ev.eval_text ? 'badge-success' : 'badge-warning'"
+                      :class="ev.eval_released ? 'badge-success' : 'badge-warning'"
                     >
-                      {{ ev.eval_text ? 'Bewertet' : 'Bewertung ausstehend' }}
+                      {{
+                        ev.eval_released
+                          ? 'Bewertung freigegeben'
+                          : ev.eval_text
+                            ? 'Entwurf (nicht freigegeben)'
+                            : 'Bewertung ausstehend'
+                      }}
+                    </span>
+                    <span
+                      v-else
+                      class="badge"
+                      :class="
+                        ev.eval_released && ev.eval_text
+                          ? 'badge-success'
+                          : 'badge-warning'
+                      "
+                    >
+                      {{
+                        ev.eval_released && ev.eval_text
+                          ? 'Bewertet'
+                          : 'Bewertung ausstehend'
+                      }}
                     </span>
                   </div>
 
@@ -299,8 +351,14 @@ const phase3Partial = computed(
                     </div>
                     <div class="eval-col">
                       <span class="eval-label">3. Beurteilung / Feedback (Berufsbildner/in):</span>
-                      <div :class="{ 'text-muted': !ev.eval_text }">
+                      <div
+                        v-if="ctx.auth.isTrainer || ev.eval_released"
+                        :class="{ 'text-muted': !ev.eval_text }"
+                      >
                         {{ ev.eval_text || 'Noch nicht bewertet.' }}
+                      </div>
+                      <div v-else class="text-muted">
+                        Bewertung noch nicht freigegeben.
                       </div>
                     </div>
                   </div>
@@ -311,6 +369,16 @@ const phase3Partial = computed(
                 </div>
 
                 <div v-if="ctx.auth.isTrainer" class="flex-gap">
+                  <EditButton
+                    :label="
+                      ev.eval_released
+                        ? 'Freigabe der Bewertung zurückziehen'
+                        : 'Bewertung freigeben'
+                    "
+                    :icon="ev.eval_released ? 'undo' : 'check'"
+                    :variant="ev.eval_released ? 'default' : 'success'"
+                    @click="ctx.toggleEvalReleased(ev)"
+                  />
                   <EditButton
                     :label="ev.eval_text ? 'Bewertung anpassen' : 'Jetzt bewerten'"
                     icon="edit"

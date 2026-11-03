@@ -1,7 +1,8 @@
 from datetime import date
 from flask import Blueprint, request, jsonify
-from backend.models import db, Grades, User
+from backend.models import db, Grades
 from backend.auth import login_required, get_current_user, can_access_student
+from backend.policies import is_student, supervised_student_ids
 
 bp = Blueprint("api_grades", __name__, url_prefix="/api/grades")
 
@@ -24,22 +25,20 @@ def list_grades():
     student_id = request.args.get("student", type=int)
     subject = request.args.get("subject")
 
-    if actor.role == "lernender":
-        student_id = actor.id
-
     query = Grades.query
-    if student_id:
+    if is_student(actor):
+        if student_id and student_id != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+        query = query.filter_by(student=actor.id)
+    elif student_id:
         if not can_access_student(actor, student_id):
             return jsonify({"error": "Keine Berechtigung."}), 403
         query = query.filter_by(student=student_id)
     else:
-        company_student_ids = [
-            u.id
-            for u in User.query.filter_by(
-                company=actor.company, role="lernender"
-            ).all()
-        ]
-        query = query.filter(Grades.student.in_(company_student_ids))
+        sub_ids = supervised_student_ids(actor)
+        if not sub_ids:
+            return jsonify({"data": []})
+        query = query.filter(Grades.student.in_(sub_ids))
 
     if subject:
         query = query.filter_by(subject=subject)

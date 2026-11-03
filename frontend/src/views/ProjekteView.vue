@@ -29,6 +29,7 @@ const projDescription = ref('')
 const projGoalsText = ref('')
 const projStartDate = ref('')
 const projDueDate = ref('')
+const projPlanningReleased = ref(false)
 
 // Implementation / Task Report Modal
 const showImplModal = ref(false)
@@ -49,9 +50,14 @@ const evalGoal = ref('')
 const evalParticipation = ref('')
 const evalPlanningText = ref('')
 const evalText = ref('')
+const evalReleased = ref(false)
 
 const rootProjects = computed(() =>
-  projects.value.filter((p) => !p.parent_project)
+  projects.value.filter(
+    (p) =>
+      !p.parent_project ||
+      !projects.value.some((parent) => parent.id === p.parent_project)
+  )
 )
 
 function implementationsFor(projectId) {
@@ -173,6 +179,7 @@ function openNewProject(parentId = null) {
   projGoalsText.value = ''
   projStartDate.value = new Date().toISOString().slice(0, 10)
   projDueDate.value = ''
+  projPlanningReleased.value = false
   showProjectModal.value = true
 }
 
@@ -184,6 +191,7 @@ function openEditProject(proj) {
   projGoalsText.value = (proj.goals || []).join('\n')
   projStartDate.value = proj.start_date || ''
   projDueDate.value = proj.due_date || ''
+  projPlanningReleased.value = Boolean(proj.planning_released)
   showProjectModal.value = true
 }
 
@@ -196,7 +204,8 @@ async function saveProject() {
       description: projDescription.value,
       goals: projGoalsText.value,
       start_date: projStartDate.value || null,
-      due_date: projDueDate.value || null
+      due_date: projDueDate.value || null,
+      planning_released: projPlanningReleased.value
     }
     if (editingProject.value) {
       await apiFetch(`/api/project/${editingProject.value.id}`, {
@@ -211,6 +220,19 @@ async function saveProject() {
       expandedIds.value[created.id] = true
     }
     showProjectModal.value = false
+    await loadAll()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+async function togglePlanningReleased(proj) {
+  error.value = ''
+  try {
+    await apiFetch(`/api/project/${proj.id}`, {
+      method: 'PUT',
+      body: { planning_released: !proj.planning_released }
+    })
     await loadAll()
   } catch (e) {
     error.value = e.message
@@ -325,6 +347,7 @@ function openNewEval(proj, prefillGoal = '', focus = 'planning') {
   evalParticipation.value = implementationsFor(proj.id)[0]?.id || ''
   evalPlanningText.value = ''
   evalText.value = ''
+  evalReleased.value = false
   showEvalModal.value = true
 }
 
@@ -337,6 +360,7 @@ function openEditEval(ev, focus = 'eval') {
   evalParticipation.value = ev.participation || ''
   evalPlanningText.value = ev.planning_text || ''
   evalText.value = ev.eval_text || ''
+  evalReleased.value = Boolean(ev.eval_released)
   showEvalModal.value = true
 }
 
@@ -348,7 +372,8 @@ async function saveEval() {
         body: {
           goal: evalGoal.value,
           planning_text: evalPlanningText.value,
-          eval_text: evalText.value
+          eval_text: evalText.value,
+          eval_released: evalReleased.value
         }
       })
     } else {
@@ -360,11 +385,25 @@ async function saveEval() {
           student: Number(evalStudentId.value),
           goal: evalGoal.value,
           planning_text: evalPlanningText.value,
-          eval_text: evalText.value
+          eval_text: evalText.value,
+          eval_released: evalReleased.value
         }
       })
     }
     showEvalModal.value = false
+    await loadAll()
+  } catch (e) {
+    error.value = e.message
+  }
+}
+
+async function toggleEvalReleased(ev) {
+  error.value = ''
+  try {
+    await apiFetch(`/api/evaluation/${ev.id}`, {
+      method: 'PUT',
+      body: { eval_released: !ev.eval_released }
+    })
     await loadAll()
   } catch (e) {
     error.value = e.message
@@ -396,6 +435,7 @@ provide('projectCtx', {
   formatDate,
   openNewProject,
   openEditProject,
+  togglePlanningReleased,
   deleteProject,
   openNewImpl,
   openEditImpl,
@@ -403,6 +443,7 @@ provide('projectCtx', {
   deleteImpl,
   openNewEval,
   openEditEval,
+  toggleEvalReleased,
   deleteEval
 })
 </script>
@@ -606,6 +647,13 @@ provide('projectCtx', {
           />
         </div>
 
+        <div class="form-group">
+          <label class="flex-gap" style="cursor: pointer">
+            <input v-model="projPlanningReleased" type="checkbox" />
+            <span>Planung für beteiligte Lernende freigeben</span>
+          </label>
+        </div>
+
         <div class="flex-between">
           <button type="button" class="btn" @click="showProjectModal = false">
             Abbrechen
@@ -676,6 +724,13 @@ provide('projectCtx', {
             rows="4"
             placeholder="Beurteilung der Arbeitsqualität, Selbstständigkeit und Zielerreichung nach der Ausführung..."
           />
+        </div>
+
+        <div class="form-group">
+          <label class="flex-gap" style="cursor: pointer">
+            <input v-model="evalReleased" type="checkbox" />
+            <span>Bewertung für Lernende/n freigeben</span>
+          </label>
         </div>
 
         <div class="flex-between">
