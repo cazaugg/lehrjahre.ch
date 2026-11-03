@@ -155,6 +155,7 @@ function startEditPerson(person) {
   }
   profileDraft.id = person.id
   editingPersonId.value = person.id
+  expandedIds.value[person.id] = true
 }
 
 function cancelEditPerson() {
@@ -220,12 +221,21 @@ function formatDate(d) {
         </p>
       </div>
       <div v-if="auth.isAdminOrHr" class="flex-gap">
-        <button type="button" class="btn" @click="openCreateUser('ausbildner')">
-          + Ausbildner/in erfassen
-        </button>
-        <button type="button" class="btn btn-primary" @click="openCreateUser('lernender')">
-          + Lernende/n erfassen
-        </button>
+        <EditButton
+          size="lg"
+          show-label
+          icon="user-plus"
+          label="Ausbildner/in erfassen"
+          @click="openCreateUser('ausbildner')"
+        />
+        <EditButton
+          size="lg"
+          show-label
+          icon="user-plus"
+          variant="primary"
+          label="Lernende/n erfassen"
+          @click="openCreateUser('lernender')"
+        />
       </div>
     </div>
 
@@ -294,13 +304,19 @@ function formatDate(d) {
             </div>
           </div>
 
-          <div class="flex-gap">
+          <div class="flex-gap" @click.stop>
             <span v-if="person.role === 'ausbildner'" class="badge badge-success">
               {{ studentsForSupervisor(person.id).length }} betreute Lernende
             </span>
             <span v-else class="badge badge-info">
               {{ supervisorsForStudent(person.id).length }} Ausbildner
             </span>
+            <EditButton
+              v-if="person.role === 'lernender' && auth.isAdminOrHr"
+              label="Stammdaten bearbeiten"
+              icon="edit"
+              @click="startEditPerson(person)"
+            />
           </div>
         </div>
 
@@ -351,14 +367,7 @@ function formatDate(d) {
 
           <!-- Lernende/r -->
           <template v-else>
-            <div class="flex-between" style="margin-bottom: var(--space-3)">
-              <h4 style="margin: 0">Stammdaten</h4>
-              <EditButton
-                v-if="auth.isAdminOrHr && editingPersonId !== person.id"
-                label="Stammdaten bearbeiten"
-                @click="startEditPerson(person)"
-              />
-            </div>
+            <h4 style="margin: 0 0 var(--space-3) 0">Stammdaten</h4>
 
             <form
               v-if="editingPersonId === person.id"
@@ -550,14 +559,13 @@ function formatDate(d) {
                       rel.supervisor_job_title
                     }})
                   </span>
-                  <button
+                  <EditButton
                     v-if="auth.isTrainer"
-                    type="button"
-                    class="btn btn-sm btn-danger"
+                    label="Zuweisung entfernen"
+                    icon="delete"
+                    variant="danger"
                     @click="unlinkSupervisor(rel.id)"
-                  >
-                    ×
-                  </button>
+                  />
                 </div>
               </div>
 
@@ -572,9 +580,12 @@ function formatDate(d) {
                     {{ sup.full_name }} ({{ sup.job_title }})
                   </option>
                 </select>
-                <button type="button" class="btn" @click="linkSupervisor(person.id)">
-                  Zuweisen
-                </button>
+                <EditButton
+                  label="Ausbildner/in zuweisen"
+                  icon="plus"
+                  variant="primary"
+                  @click="linkSupervisor(person.id)"
+                />
               </div>
             </div>
 
@@ -693,7 +704,7 @@ function formatDate(d) {
   font-weight: 700;
   font-size: 0.85rem;
   overflow: hidden;
-  border: 1px solid #f5c2c9;
+  border: 1px solid var(--color-primary-border);
   flex-shrink: 0;
 }
 

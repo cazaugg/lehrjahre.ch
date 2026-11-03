@@ -54,7 +54,7 @@ async function handleLogout() {
 <template>
   <div class="app-shell">
     <aside class="sidebar">
-      <div class="sidebar-brand">
+      <router-link to="/" class="sidebar-brand" title="Zur Startseite">
         <BrandLogo :size="40" />
         <div>
           <div class="brand-title">
@@ -63,7 +63,7 @@ async function handleLogout() {
           </div>
           <div class="brand-sub">MEM Lerndokumentation</div>
         </div>
-      </div>
+      </router-link>
 
       <nav class="sidebar-nav">
         <div
@@ -128,7 +128,9 @@ async function handleLogout() {
       </header>
 
       <main class="content-area">
-        <slot />
+        <div class="content-inner">
+          <slot />
+        </div>
       </main>
     </div>
   </div>
@@ -155,7 +157,14 @@ async function handleLogout() {
   gap: var(--space-3);
   padding-bottom: var(--space-5);
   margin-bottom: var(--space-4);
-  border-bottom: 1px solid #374151;
+  border-bottom: 1px solid var(--color-sidebar-border);
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-brand:hover {
+  opacity: 0.85;
+  text-decoration: none;
 }
 
 .brand-title {
@@ -169,7 +178,7 @@ async function handleLogout() {
 
 .brand-sub {
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: var(--color-sidebar-muted);
 }
 
 .sidebar-nav {
@@ -190,32 +199,35 @@ async function handleLogout() {
   align-items: center;
   padding: 0.65rem 0.85rem;
   border-radius: var(--radius-sm);
-  color: #d1d5db;
-  font-size: 0.92rem;
+  color: var(--color-sidebar-text);
+  font-size: 0.9rem;
   font-weight: 500;
-  transition: background 0.15s;
+  transition: all 0.15s ease;
+  border-left: 3px solid transparent;
 }
 
 .nav-link:hover {
   background: var(--color-sidebar-hover);
   color: #ffffff;
+  text-decoration: none;
 }
 
 .nav-link.active {
-  background: var(--color-primary);
+  background: var(--color-sidebar-active);
   color: #ffffff;
   font-weight: 600;
+  border-left-color: var(--color-accent);
 }
 
 .nav-link.parent-active {
-  background: #1f2937;
+  background: var(--color-sidebar-hover);
   color: #ffffff;
   font-weight: 600;
 }
 
 .chevron {
   font-size: 0.75rem;
-  color: #9ca3af;
+  color: var(--color-sidebar-muted);
 }
 
 .sub-nav {
@@ -224,33 +236,34 @@ async function handleLogout() {
   gap: 0.15rem;
   margin: 0.25rem 0 0.4rem 0.85rem;
   padding-left: 0.65rem;
-  border-left: 2px solid #374151;
+  border-left: 2px solid var(--color-sidebar-border);
 }
 
 .sub-nav-link {
   display: block;
   padding: 0.45rem 0.75rem;
   border-radius: var(--radius-sm);
-  color: #9ca3af;
-  font-size: 0.85rem;
+  color: var(--color-sidebar-muted);
+  font-size: 0.84rem;
   font-weight: 500;
   transition: all 0.15s ease;
 }
 
 .sub-nav-link:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.07);
+  text-decoration: none;
 }
 
 .sub-nav-link.active {
-  background: var(--color-primary);
+  background: var(--color-sidebar-active);
   color: #ffffff;
   font-weight: 600;
 }
 
 .sidebar-footer {
   padding-top: var(--space-4);
-  border-top: 1px solid #374151;
+  border-top: 1px solid var(--color-sidebar-border);
 }
 
 .user-summary {
@@ -265,23 +278,25 @@ async function handleLogout() {
 
 .user-role {
   font-size: 0.78rem;
-  color: #9ca3af;
+  color: var(--color-sidebar-muted);
 }
 
 .user-company {
   font-size: 0.75rem;
-  color: #6b7280;
+  color: #64748b;
 }
 
 .logout-btn {
   width: 100%;
-  background: #1f2937;
-  color: #f3f4f6;
-  border-color: #374151;
+  background: var(--color-sidebar-hover);
+  color: #f8fafc;
+  border-color: var(--color-sidebar-border);
 }
 
 .logout-btn:hover {
-  background: #374151;
+  background: var(--color-sidebar-active);
+  border-color: #2c5a85;
+  color: #ffffff;
 }
 
 .main-area {
@@ -308,10 +323,41 @@ async function handleLogout() {
 }
 
 .content-area {
+  flex: 1;
+  min-height: 0;
+}
+
+.content-inner {
   padding: var(--space-6);
   max-width: 1360px;
   width: 100%;
   margin: 0 auto;
+}
+
+/* Lock the desktop shell to the viewport; only the content panel scrolls. */
+@media (min-width: 821px) {
+  .app-shell {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .sidebar {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .content-area {
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .content-inner {
+    height: 100%;
+    container-type: size;
+  }
 }
 
 @media (max-width: 820px) {

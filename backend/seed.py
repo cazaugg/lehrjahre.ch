@@ -1,4 +1,8 @@
+import io
 import json
+import os
+import uuid
+import zipfile
 from datetime import date, datetime, timezone
 from backend.app import create_app
 from backend.models import (
@@ -13,7 +17,7 @@ from backend.models import (
     Knowledge,
 )
 from backend.auth import hash_password
-from backend.storage import save_text_document
+from backend.storage import get_company_dir, save_text_document
 
 
 KNOWLEDGE_TOPICS = [
@@ -589,6 +593,220 @@ Nur kalibrierte und freigegebene Prüfmittel dürfen für Prüfungen verwendet w
 ]
 
 
+def save_binary_document(data: bytes, filename: str, company_name: str) -> tuple[str, str]:
+    """Save seed-generated binary data under the company's document folder."""
+    slug, company_dir = get_company_dir(company_name)
+    stored_name = f"{uuid.uuid4().hex[:12]}_{filename}"
+    abs_path = os.path.realpath(os.path.join(company_dir, stored_name))
+    if not abs_path.startswith(company_dir + os.sep):
+        raise ValueError("Invalid destination path")
+    with open(abs_path, "wb") as handle:
+        handle.write(data)
+    return filename, f"{slug}/{stored_name}"
+
+
+def build_word_preview_docx() -> bytes:
+    """Build a small, dependency-free DOCX used to demo the Word preview."""
+    content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>'''
+
+    root_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>'''
+
+    document_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>'''
+
+    styles = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault>
+    <w:pPrDefault><w:pPr><w:spacing w:after="160"/></w:pPr></w:pPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="240" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+  <w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders>
+    <w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+    <w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+    <w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+    <w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+    <w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+    <w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+  </w:tblBorders></w:tblPr></w:style>
+</w:styles>'''
+
+    rows = [
+        ("Begriff", "Beschreibung"),
+        ("Vorschau", "Wird direkt im Browser dargestellt."),
+        ("Original", "Kann zusätzlich über «Datei öffnen» heruntergeladen werden."),
+    ]
+    table_rows = "".join(
+        "<w:tr>"
+        f'<w:tc><w:tcPr><w:tcW w:w="2800" w:type="dxa"/></w:tcPr><w:p><w:r>{"<w:rPr><w:b/></w:rPr>" if index == 0 else ""}<w:t>{left}</w:t></w:r></w:p></w:tc>'
+        f'<w:tc><w:tcPr><w:tcW w:w="5600" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>{right}</w:t></w:r></w:p></w:tc>'
+        "</w:tr>"
+        for index, (left, right) in enumerate(rows)
+    )
+
+    document = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Word-Vorschau Beispiel</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Dieses Dokument zeigt die </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>schreibgeschützte Word-Vorschau</w:t></w:r><w:r><w:t xml:space="preserve"> in lehrjahre.ch.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Inhalt</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Überschriften und Absätze</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Fett formatierter Text</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Tabellen</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Beispieltabelle</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="2800"/><w:gridCol w:w="5600"/></w:tblGrid>
+      {table_rows}
+    </w:tbl>
+    <w:p><w:r><w:t xml:space="preserve">Dieses Beispiel wird durch das Seed-Skript erzeugt und umfasst mehrere Seiten.</w:t></w:r></w:p>
+    <w:p><w:r><w:br w:type="page"/></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Seite 2: Hinweise zur Vorschau</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Word-Dokumente lassen sich direkt im Browser lesen, ohne sie herunterzuladen oder in Word zu öffnen.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Was wird dargestellt?</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Überschriften, Absätze und Aufzählungen</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Fett und kursiv formatierter Text</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Tabellen und Seitenumbrüche</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• Kopf- und Fusszeilen sowie Bilder</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Gut zu wissen</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Die Vorschau ist schreibgeschützt. Das Original bleibt über die Schaltfläche «Datei öffnen» verfügbar.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Sehr komplexe Word-Elemente wie Diagramme oder eingebettete Objekte können in der Vorschau abweichen.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Diese zweite Seite demonstriert einen expliziten Seitenumbruch im Word-Dokument.</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+  </w:body>
+</w:document>'''
+
+    core = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>Word-Vorschau Beispiel</dc:title>
+  <dc:creator>lehrjahre.ch</dc:creator>
+  <cp:lastModifiedBy>lehrjahre.ch</cp:lastModifiedBy>
+</cp:coreProperties>'''
+
+    app_props = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>lehrjahre.ch</Application></Properties>'''
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", root_rels)
+        archive.writestr("word/document.xml", document)
+        archive.writestr("word/styles.xml", styles)
+        archive.writestr("word/_rels/document.xml.rels", document_rels)
+        archive.writestr("docProps/core.xml", core)
+        archive.writestr("docProps/app.xml", app_props)
+    return buffer.getvalue()
+
+
+def build_pdf_preview() -> bytes:
+    """Build a small, dependency-free two-page PDF used to demo the PDF preview."""
+
+    def escape(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+    def line(x1, y1, x2, y2, width=0.6):
+        return f"{width} w {x1} {y1} m {x2} {y2} l S\n"
+
+    def text(x, y, value, size=12, font="F1"):
+        return f"BT /{font} {size} Tf {x} {y} Td ({escape(value)}) Tj ET\n"
+
+    page1 = [text(50, 790, "PDF-Vorschau Beispiel", 24, "F2")]
+    page1.append(text(50, 760, "Dieses PDF wird direkt im Browser angezeigt.", 12))
+    page1.append(line(50, 745, 545, 745))
+    page1.append(text(50, 720, "Inhalt", 16, "F2"))
+    for index, item in enumerate(
+        [
+            "Überschriften und Absätze",
+            "Tabellen und Linien",
+            "Mehrere Seiten mit Seitenumbruch",
+        ]
+    ):
+        page1.append(text(60, 695 - index * 20, f"- {item}", 12))
+
+    page1.append(text(50, 610, "Beispieltabelle", 16, "F2"))
+    table_top = 580
+    row_height = 28
+    for row in range(4):
+        page1.append(line(50, table_top - row * row_height, 545, table_top - row * row_height))
+    for column in (50, 200, 545):
+        page1.append(line(column, table_top, column, table_top - 3 * row_height))
+
+    rows = [
+        ("Begriff", "Beschreibung"),
+        ("Vorschau", "Wird direkt im Browser dargestellt."),
+        ("Original", "Bleibt über «Datei öffnen» verfügbar."),
+    ]
+    for index, (left, right) in enumerate(rows):
+        y = table_top - index * row_height - 18
+        page1.append(text(58, y, left, 11, "F2" if index == 0 else "F1"))
+        page1.append(text(208, y, right, 11))
+    page1.append(text(50, 520, "Erzeugt durch das Seed-Skript.", 10))
+    page1_stream = "".join(page1).encode("latin-1")
+
+    page2 = [text(50, 790, "Seite 2: Hinweise zur Vorschau", 22, "F2")]
+    page2.append(text(50, 760, "PDF-Dokumente lassen sich ohne Download im Browser lesen.", 12))
+    page2.append(line(50, 745, 545, 745))
+    page2.append(text(50, 720, "Was wird dargestellt?", 16, "F2"))
+    for index, item in enumerate(
+        [
+            "Text, Überschriften und Absätze",
+            "Tabellen und grafische Linien",
+            "Mehrere Seiten und Seitenumbrüche",
+        ]
+    ):
+        page2.append(text(60, 695 - index * 20, f"- {item}", 12))
+    page2.append(text(50, 610, "Gut zu wissen", 16, "F2"))
+    page2.append(text(50, 585, "Die Vorschau ist schreibgeschützt. Das Original bleibt über", 12))
+    page2.append(text(50, 565, "die Schaltfläche «Datei öffnen» verfügbar.", 12))
+    page2.append(text(50, 530, "Diese zweite Seite demonstriert einen Seitenumbruch im PDF.", 12))
+    page2_stream = "".join(page2).encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
+        b"<< /Length %d >>\nstream\n" % len(page1_stream) + page1_stream + b"\nendstream",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 8 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(page2_stream) + page2_stream + b"\nendstream",
+    ]
+
+    pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf += f"{index} 0 obj\n".encode("ascii") + body + b"\nendobj\n"
+
+    xref_offset = len(pdf)
+    pdf += f"xref\n0 {len(objects) + 1}\n".encode("ascii")
+    pdf += b"0000000000 65535 f \n"
+    for offset in offsets[1:]:
+        pdf += f"{offset:010d} 00000 n \n".encode("ascii")
+    pdf += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n"
+    ).encode("ascii")
+    return bytes(pdf)
+
+
 def seed_database():
     app = create_app()
     with app.app_context():
@@ -953,7 +1171,41 @@ def seed_database():
             is_done=True,
         )
 
-        db.session.add_all([doc_journal, doc_gespraech, doc_tpl, doc_vertrag])
+        word_fn, word_path = save_binary_document(
+            build_word_preview_docx(), "Word_Beispiel.docx", company
+        )
+        doc_word = Documents(
+            name="Word-Beispielzeugnis (Vorschau, 2 Seiten)",
+            description="Mehrseitiges Beispiel eines Word-Dokuments mit Überschriften, Tabelle und Seitenumbruch",
+            filename=word_fn,
+            path=word_path,
+            type="zeugnis",
+            owner=student1.id,
+            author=admin.id,
+            is_template=False,
+            updated_date=datetime.now(timezone.utc),
+            is_done=True,
+        )
+
+        pdf_fn, pdf_path = save_binary_document(
+            build_pdf_preview(), "PDF_Beispiel.pdf", company
+        )
+        doc_pdf = Documents(
+            name="PDF-Beispielkursnachweis (Vorschau, 2 Seiten)",
+            description="Mehrseitiges Beispiel eines PDF-Dokuments mit Text, Tabelle und Seitenumbruch",
+            filename=pdf_fn,
+            path=pdf_path,
+            type="kursnachweis",
+            owner=student1.id,
+            author=admin.id,
+            is_template=False,
+            updated_date=datetime.now(timezone.utc),
+            is_done=True,
+        )
+
+        db.session.add_all(
+            [doc_journal, doc_gespraech, doc_tpl, doc_vertrag, doc_word, doc_pdf]
+        )
         db.session.flush()
 
         # 9. Knowledge Base (Wissen: Thema -> Seite)

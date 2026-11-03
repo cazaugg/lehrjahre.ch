@@ -1,38 +1,56 @@
 :root {
-  /* Swiss Industrial & Clean Educational Palette */
-  --color-primary: #c8102e;
-  --color-primary-hover: #a50d26;
-  --color-primary-soft: #fdf2f4;
+  /* Palette derived from lehrjahre.ch crest logo (Steel Blue, Deep Navy, Silver, Swiss Crimson) */
+  --color-primary: #164e78;
+  --color-primary-hover: #0f3a5b;
+  --color-primary-soft: #eaf2f8;
+  --color-primary-border: #bfd5e6;
 
-  --color-bg: #f4f6f8;
+  --color-accent: #c81e24;
+  --color-accent-hover: #a6171c;
+  --color-accent-soft: #fdeeee;
+  --color-accent-border: #f5c2c4;
+
+  --color-bg: #f1f5f9;
   --color-surface: #ffffff;
   --color-surface-muted: #f8fafc;
-  --color-sidebar: #111827;
-  --color-sidebar-hover: #1f2937;
-  --color-sidebar-text: #e5e7eb;
+  --color-surface-subtle: #eef3f8;
 
-  --color-text: #111827;
-  --color-text-muted: #4b5563;
-  --color-text-light: #6b7280;
+  --color-sidebar: #0b2236;
+  --color-sidebar-hover: #13334f;
+  --color-sidebar-active: #1a4468;
+  --color-sidebar-border: #1d3f5e;
+  --color-sidebar-text: #e2e8f0;
+  --color-sidebar-muted: #94a3b8;
 
-  --color-border: #e2e8f0;
-  --color-border-strong: #cbd5e1;
+  --color-text: #0f172a;
+  --color-text-muted: #475569;
+  --color-text-light: #64748b;
+
+  --color-border: #dbe3ec;
+  --color-border-strong: #bfccd9;
 
   --color-success: #15803d;
   --color-success-bg: #dcfce7;
+  --color-success-border: #bbf7d0;
+
   --color-warning: #b45309;
   --color-warning-bg: #fef3c7;
+  --color-warning-border: #fde68a;
+
   --color-danger: #b91c1c;
   --color-danger-bg: #fee2e2;
-  --color-info: #1d4ed8;
-  --color-info-bg: #dbeafe;
+  --color-danger-border: #fecaca;
+
+  --color-info: #164e78;
+  --color-info-bg: #e6f0f7;
+  --color-info-border: #bfd5e6;
 
   --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-sm: 0 1px 3px rgba(11, 34, 54, 0.06), 0 1px 2px rgba(11, 34, 54, 0.04);
+  --shadow-md: 0 8px 24px rgba(11, 34, 54, 0.1);
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;

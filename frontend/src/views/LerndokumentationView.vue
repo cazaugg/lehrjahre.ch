@@ -5,6 +5,7 @@ import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import ModalDialog from '../components/ui/ModalDialog.vue'
 import DocumentManager from '../components/ui/DocumentManager.vue'
+import EditButton from '../components/ui/EditButton.vue'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -187,9 +188,14 @@ function formatDate(d) {
             Schulnoten und Prüfungsresultate (Neueste zuerst)
           </p>
         </div>
-        <button type="button" class="btn btn-primary" @click="openNewGrade">
-          + Note eintragen
-        </button>
+        <EditButton
+          size="lg"
+          show-label
+          icon="plus"
+          variant="primary"
+          label="Note eintragen"
+          @click="openNewGrade"
+        />
       </div>
 
       <!-- Filter & Search Bar -->
@@ -263,7 +269,7 @@ function formatDate(d) {
               </div>
             </div>
 
-            <div class="flex-gap">
+            <div class="flex-gap" @click.stop>
               <span
                 class="badge"
                 :class="gradeBadgeClass(g.grade)"
@@ -271,29 +277,26 @@ function formatDate(d) {
               >
                 Note {{ Number(g.grade).toFixed(1) }}
               </span>
+              <EditButton
+                label="Note bearbeiten"
+                icon="edit"
+                @click="openEditGrade(g)"
+              />
+              <EditButton
+                label="Note löschen"
+                icon="delete"
+                variant="danger"
+                @click="deleteGrade(g)"
+              />
             </div>
           </div>
 
           <div v-if="expandedGradeIds[g.id]" class="collapsible-body">
-            <div class="flex-between">
-              <div>
-                <div class="form-label">Bemerkung / Reflexion</div>
-                <p style="margin: 0; white-space: pre-line">
-                  {{ g.comment || 'Keine Bemerkung hinterlegt.' }}
-                </p>
-              </div>
-              <div class="flex-gap">
-                <button type="button" class="btn btn-sm" @click="openEditGrade(g)">
-                  Bearbeiten
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-sm btn-danger"
-                  @click="deleteGrade(g)"
-                >
-                  Löschen
-                </button>
-              </div>
+            <div>
+              <div class="form-label">Bemerkung / Reflexion</div>
+              <p style="margin: 0; white-space: pre-line">
+                {{ g.comment || 'Keine Bemerkung hinterlegt.' }}
+              </p>
             </div>
           </div>
         </div>

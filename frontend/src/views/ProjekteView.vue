@@ -3,7 +3,9 @@ import { ref, computed, onMounted, provide } from 'vue'
 import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import ModalDialog from '../components/ui/ModalDialog.vue'
+import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
 import ProjectCard from '../components/project/ProjectCard.vue'
+import EditButton from '../components/ui/EditButton.vue'
 
 const auth = useAuthStore()
 
@@ -227,7 +229,12 @@ async function deleteProject(proj) {
 }
 
 // Implementation (Aufgaben & Berichte) CRUD
+const activeImplProject = computed(() =>
+  projects.value.find((p) => p.id === implProjectId.value) || null
+)
+
 function openNewImpl(proj) {
+  error.value = ''
   editingImpl.value = null
   implProjectId.value = proj.id
   implStudentId.value = auth.isStudent
@@ -240,6 +247,7 @@ function openNewImpl(proj) {
 }
 
 function openEditImpl(item) {
+  error.value = ''
   editingImpl.value = item
   implProjectId.value = item.project
   implStudentId.value = item.student
@@ -250,6 +258,7 @@ function openEditImpl(item) {
 }
 
 async function saveImpl() {
+  error.value = ''
   try {
     if (editingImpl.value) {
       await apiFetch(`/api/implementation/${editingImpl.value.id}`, {
@@ -271,6 +280,9 @@ async function saveImpl() {
           is_done: implIsDone.value
         }
       })
+    }
+    if (implProjectId.value) {
+      expandedIds.value[implProjectId.value] = true
     }
     showImplModal.value = false
     await loadAll()
@@ -397,62 +409,148 @@ provide('projectCtx', {
 
 <template>
   <div>
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">Projekte, Themen und Praktika</h1>
-        <p class="page-subtitle">
-          Aufgaben, Lernziele, Arbeitsberichte und Kompetenzbewertungen (Neueste zuerst)
-        </p>
+    <!-- FULL-PAGE ARBEITSBERICHT EDITOR (Phase 2) -->
+    <form
+      v-if="showImplModal"
+      class="editor-page"
+      @submit.prevent="saveImpl"
+    >
+      <div class="page-header">
+        <div class="flex-gap">
+          <h1 class="page-title">
+            {{ editingImpl ? 'Arbeitsbericht bearbeiten' : 'Neuer Arbeitsbericht' }}
+          </h1>
+          <span v-if="activeImplProject" class="badge badge-info">
+            {{ activeImplProject.title }}
+          </span>
+        </div>
+
+        <div class="editor-header-actions">
+          <label class="editor-toggle-pill">
+            <input v-model="implIsDone" type="checkbox" />
+            <span>Aufgabe abgeschlossen</span>
+          </label>
+          <button type="button" class="btn" @click="showImplModal = false">
+            Abbrechen
+          </button>
+          <button type="submit" class="btn btn-primary">
+            Speichern
+          </button>
+        </div>
       </div>
-      <div v-if="auth.isTrainer" class="flex-gap">
-        <button type="button" class="btn btn-primary" @click="openNewProject(null)">
-          + Neues Projekt / Praktikum
-        </button>
+
+      <div v-if="error" class="alert alert-error">{{ error }}</div>
+
+      <div class="editor-card">
+        <div class="editor-meta-bar">
+          <div class="editor-meta-grid">
+            <div class="form-group">
+              <label class="form-label">Titel der Aufgabe / des Arbeitsberichts *</label>
+              <input
+                v-model="implTitle"
+                type="text"
+                class="form-control"
+                placeholder="z.B. Fertigung und Vermessung Lagergehäuse"
+                required
+              />
+            </div>
+
+            <div v-if="auth.isTrainer && !editingImpl" class="form-group">
+              <label class="form-label">Lernende/r *</label>
+              <select v-model="implStudentId" class="form-control" required>
+                <option v-for="stu in auth.companyStudents" :key="stu.id" :value="stu.id">
+                  {{ stu.full_name }} ({{ stu.job_title }})
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            v-if="activeImplProject && (activeImplProject.description || (activeImplProject.goals && activeImplProject.goals.length))"
+            style="margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border); font-size: 0.85rem"
+          >
+            <div class="text-muted">
+              <strong>Projektauftrag:</strong> {{ activeImplProject.description || '–' }}
+            </div>
+            <div v-if="activeImplProject.goals && activeImplProject.goals.length" class="text-muted" style="margin-top: 4px">
+              <strong>Lernziele:</strong> {{ activeImplProject.goals.join(' · ') }}
+            </div>
+          </div>
+        </div>
+
+        <MarkdownEditor
+          v-model="implText"
+          :full-page="true"
+          :owner-id="Number(implStudentId || auth.user?.id)"
+          placeholder="Beschreiben Sie die durchgeführten Arbeitsschritte, eingesetzten Maschinen, Schnittwerte und Messresultate. Fügen Sie Fotos oder PDF-Protokolle direkt über die Werkzeugleiste ein..."
+        />
       </div>
-    </div>
+    </form>
 
-    <div v-if="error" class="alert alert-error">{{ error }}</div>
-
-    <!-- Filter & Search Bar -->
-    <div class="filter-bar">
-      <input
-        v-model="searchQuery"
-        type="search"
-        class="form-control filter-search"
-        placeholder="Projekte, Ziele, Berichte oder Lernende durchsuchen..."
-      />
-
-      <select
-        v-if="auth.isTrainer"
-        v-model="filterStudent"
-        class="form-control filter-select"
-      >
-        <option value="">Alle Lernenden</option>
-        <option v-for="stu in auth.companyStudents" :key="stu.id" :value="stu.id">
-          {{ stu.full_name }} ({{ stu.job_title }})
-        </option>
-      </select>
-
-      <select v-model="filterStatus" class="form-control filter-select">
-        <option value="">Alle Status</option>
-        <option value="open">Offen / In Arbeit</option>
-        <option value="done">Erledigt</option>
-      </select>
-
-      <span class="text-muted">{{ filteredProjects.length }} Projekte</span>
-    </div>
-
-    <!-- Collapsible Project List (collapsed by default, expand on click) -->
-    <div v-if="filteredProjects.length === 0" class="card empty-state">
-      Keine passenden Projekte gefunden.
-    </div>
-
+    <!-- STANDARD PROJECTS OVERVIEW -->
     <div v-else>
-      <ProjectCard
-        v-for="proj in filteredProjects"
-        :key="proj.id"
-        :project="proj"
-      />
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Projekte, Themen und Praktika</h1>
+          <p class="page-subtitle">
+            Aufgaben, Lernziele, Arbeitsberichte und Kompetenzbewertungen (Neueste zuerst)
+          </p>
+        </div>
+        <div v-if="auth.isTrainer" class="flex-gap">
+          <EditButton
+            size="lg"
+            show-label
+            icon="folder-plus"
+            variant="primary"
+            label="Neues Projekt / Praktikum"
+            @click="openNewProject(null)"
+          />
+        </div>
+      </div>
+
+      <div v-if="error" class="alert alert-error">{{ error }}</div>
+
+      <!-- Filter & Search Bar -->
+      <div class="filter-bar">
+        <input
+          v-model="searchQuery"
+          type="search"
+          class="form-control filter-search"
+          placeholder="Projekte, Ziele, Berichte oder Lernende durchsuchen..."
+        />
+
+        <select
+          v-if="auth.isTrainer"
+          v-model="filterStudent"
+          class="form-control filter-select"
+        >
+          <option value="">Alle Lernenden</option>
+          <option v-for="stu in auth.companyStudents" :key="stu.id" :value="stu.id">
+            {{ stu.full_name }} ({{ stu.job_title }})
+          </option>
+        </select>
+
+        <select v-model="filterStatus" class="form-control filter-select">
+          <option value="">Alle Status</option>
+          <option value="open">Offen / In Arbeit</option>
+          <option value="done">Erledigt</option>
+        </select>
+
+        <span class="text-muted">{{ filteredProjects.length }} Projekte</span>
+      </div>
+
+      <!-- Collapsible Project List (collapsed by default, expand on click) -->
+      <div v-if="filteredProjects.length === 0" class="card empty-state">
+        Keine passenden Projekte gefunden.
+      </div>
+
+      <div v-else>
+        <ProjectCard
+          v-for="proj in filteredProjects"
+          :key="proj.id"
+          :project="proj"
+        />
+      </div>
     </div>
 
     <!-- Modal: Project Create/Edit -->
@@ -510,53 +608,6 @@ provide('projectCtx', {
 
         <div class="flex-between">
           <button type="button" class="btn" @click="showProjectModal = false">
-            Abbrechen
-          </button>
-          <button type="submit" class="btn btn-primary">Speichern</button>
-        </div>
-      </form>
-    </ModalDialog>
-
-    <!-- Modal: Implementation (Aufgabe / Bericht) -->
-    <ModalDialog
-      :show="showImplModal"
-      :title="editingImpl ? 'Arbeitsbericht bearbeiten' : 'Aufgabe / Arbeitsbericht erfassen'"
-      @close="showImplModal = false"
-    >
-      <form @submit.prevent="saveImpl">
-        <div v-if="auth.isTrainer && !editingImpl" class="form-group">
-          <label class="form-label">Lernende/r *</label>
-          <select v-model="implStudentId" class="form-control" required>
-            <option v-for="stu in auth.companyStudents" :key="stu.id" :value="stu.id">
-              {{ stu.full_name }} ({{ stu.job_title }})
-            </option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Titel der Aufgabe / des Berichts *</label>
-          <input v-model="implTitle" type="text" class="form-control" required />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Tätigkeitsbericht / Ausführung</label>
-          <textarea
-            v-model="implText"
-            class="form-control"
-            rows="6"
-            placeholder="Beschreiben Sie die durchgeführten Arbeitsschritte, eingesetzten Maschinen und Messresultate..."
-          />
-        </div>
-
-        <div class="form-group">
-          <label class="flex-gap" style="cursor: pointer">
-            <input v-model="implIsDone" type="checkbox" />
-            <span>Aufgabe ist vollständig abgeschlossen</span>
-          </label>
-        </div>
-
-        <div class="flex-between">
-          <button type="button" class="btn" @click="showImplModal = false">
             Abbrechen
           </button>
           <button type="submit" class="btn btn-primary">Speichern</button>

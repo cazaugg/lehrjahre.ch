@@ -7,15 +7,22 @@ config({
       'de-DE': {
         toolbarTips: {
           bold: 'Fett',
+          underline: 'Unterstrichen',
           italic: 'Kursiv',
           strikeThrough: 'Durchgestrichen',
-          title: 'Titel',
-          quote: 'Zitat',
+          title: 'Überschrift',
+          sub: 'Tiefgestellt',
+          sup: 'Hochgestellt',
+          quote: 'Zitat / Hinweis',
           unorderedList: 'Aufzählung',
           orderedList: 'Nummerierte Liste',
-          task: 'Aufgabenliste',
-          link: 'Link',
-          table: 'Tabelle',
+          task: 'Aufgabenliste / Checkliste',
+          codeRow: 'Inline-Code',
+          code: 'Codeblock',
+          link: 'Web-Link einfügen',
+          image: 'Bild-URL einfügen',
+          table: 'Tabelle einfügen',
+          katex: 'Mathematische Formel ($…$)',
           revoke: 'Rückgängig',
           next: 'Wiederholen'
         },
@@ -27,8 +34,13 @@ config({
           h5: 'Überschrift 5',
           h6: 'Überschrift 6'
         },
+        katex: {
+          inline: 'Inline-Formel ($…$)',
+          block: 'Block-Formel ($$…$$)'
+        },
         linkModalTips: {
           linkTitle: 'Link einfügen',
+          imageTitle: 'Bild einfügen',
           descLabel: 'Beschreibung:',
           descLabelPlaceHolder: 'Beschreibung eingeben...',
           urlLabel: 'Adresse:',

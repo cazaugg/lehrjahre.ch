@@ -1,5 +1,7 @@
 <script setup>
 import { computed, inject } from 'vue'
+import EditButton from '../ui/EditButton.vue'
+import MarkdownEditor from '../ui/MarkdownEditor.vue'
 
 const props = defineProps({
   project: { type: Object, required: true },
@@ -48,27 +50,48 @@ const phase3Partial = computed(
         </div>
       </div>
 
-      <!-- 3-Phase Stepper Pills -->
-      <div class="phase-stepper" @click.stop="ctx.toggleExpand(project)">
-        <div class="step-pill" :class="{ done: phase1Done }">
-          <span class="step-num">1</span>
-          <span>Planung ({{ goals.length }})</span>
+      <!-- 3-Phase Stepper + Header Actions on Right -->
+      <div class="flex-gap">
+        <div class="phase-stepper" @click.stop="ctx.toggleExpand(project)">
+          <div class="step-pill" :class="{ done: phase1Done }">
+            <span class="step-num">1</span>
+            <span>Planung ({{ goals.length }})</span>
+          </div>
+          <span class="step-arrow">→</span>
+          <div
+            class="step-pill"
+            :class="{ done: phase2Done, active: phase2Active && !phase2Done }"
+          >
+            <span class="step-num">2</span>
+            <span>Ausführung ({{ impls.length }})</span>
+          </div>
+          <span class="step-arrow">→</span>
+          <div
+            class="step-pill"
+            :class="{ done: phase3Done, active: phase3Partial }"
+          >
+            <span class="step-num">3</span>
+            <span>Bewertung ({{ evals.filter((e) => e.eval_text).length }}/{{ evals.length }})</span>
+          </div>
         </div>
-        <span class="step-arrow">→</span>
-        <div
-          class="step-pill"
-          :class="{ done: phase2Done, active: phase2Active && !phase2Done }"
-        >
-          <span class="step-num">2</span>
-          <span>Ausführung ({{ impls.length }})</span>
-        </div>
-        <span class="step-arrow">→</span>
-        <div
-          class="step-pill"
-          :class="{ done: phase3Done, active: phase3Partial }"
-        >
-          <span class="step-num">3</span>
-          <span>Bewertung ({{ evals.filter((e) => e.eval_text).length }}/{{ evals.length }})</span>
+
+        <div v-if="ctx.auth.isTrainer" class="flex-gap">
+          <EditButton
+            label="Teilprojekt hinzufügen"
+            icon="folder-plus"
+            @click="ctx.openNewProject(project.id)"
+          />
+          <EditButton
+            label="Projekt bearbeiten"
+            icon="edit"
+            @click="ctx.openEditProject(project)"
+          />
+          <EditButton
+            label="Projekt löschen"
+            icon="delete"
+            variant="danger"
+            @click="ctx.deleteProject(project)"
+          />
         </div>
       </div>
     </div>
@@ -89,27 +112,12 @@ const phase3Partial = computed(
               </div>
             </div>
             <div v-if="ctx.auth.isTrainer" class="flex-gap">
-              <button
-                type="button"
-                class="btn btn-sm"
+              <EditButton
+                label="Zielplanung für Lernende/n hinzufügen"
+                icon="plus"
+                variant="primary"
                 @click="ctx.openNewEval(project, '', 'planning')"
-              >
-                + Zielplanung für Lernende/n
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm"
-                @click="ctx.openEditProject(project)"
-              >
-                Projekt bearbeiten
-              </button>
-              <button
-                type="button"
-                class="btn btn-sm btn-danger"
-                @click="ctx.deleteProject(project)"
-              >
-                Löschen
-              </button>
+              />
             </div>
           </div>
 
@@ -130,14 +138,12 @@ const phase3Partial = computed(
               <ul v-else class="goal-list">
                 <li v-for="(g, idx) in goals" :key="idx" class="goal-item">
                   <span>🎯 {{ g }}</span>
-                  <button
+                  <EditButton
                     v-if="ctx.auth.isTrainer"
-                    type="button"
-                    class="btn btn-sm"
+                    label="Für Lernende/n planen"
+                    icon="plus"
                     @click="ctx.openNewEval(project, g, 'planning')"
-                  >
-                    Für Lernende/n planen
-                  </button>
+                  />
                 </li>
               </ul>
             </div>
@@ -156,13 +162,11 @@ const phase3Partial = computed(
                   </div>
                 </div>
                 <div v-if="ctx.auth.isTrainer" class="flex-gap">
-                  <button
-                    type="button"
-                    class="btn btn-sm"
+                  <EditButton
+                    label="Planung anpassen"
+                    icon="edit"
                     @click="ctx.openEditEval(ev, 'planning')"
-                  >
-                    Planung anpassen
-                  </button>
+                  />
                 </div>
               </div>
             </div>
@@ -181,13 +185,12 @@ const phase3Partial = computed(
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              class="btn btn-primary btn-sm"
+            <EditButton
+              label="Arbeitsbericht erfassen"
+              icon="plus"
+              variant="primary"
               @click="ctx.openNewImpl(project)"
-            >
-              + Arbeitsbericht erfassen
-            </button>
+            />
           </div>
 
           <div class="phase-content">
@@ -207,8 +210,11 @@ const phase3Partial = computed(
                       {{ item.is_done ? 'Abgeschlossen' : 'In Arbeit' }}
                     </span>
                   </div>
-                  <p style="margin: 6px 0 4px 0; white-space: pre-line">
-                    {{ item.text || 'Kein Berichtstext vorhanden.' }}
+                  <div v-if="item.text" style="margin: 8px 0">
+                    <MarkdownEditor :model-value="item.text" :readonly="true" />
+                  </div>
+                  <p v-else class="text-muted" style="margin: 6px 0 4px 0">
+                    Kein Berichtstext vorhanden.
                   </p>
                   <div class="text-muted">
                     Lernende/r: {{ item.student_name }}
@@ -219,27 +225,23 @@ const phase3Partial = computed(
                 </div>
 
                 <div class="flex-gap">
-                  <button
-                    type="button"
-                    class="btn btn-sm"
+                  <EditButton
+                    :label="item.is_done ? 'Wieder öffnen' : 'Als erledigt markieren'"
+                    :icon="item.is_done ? 'undo' : 'check'"
+                    :variant="item.is_done ? 'default' : 'success'"
                     @click="ctx.toggleImplDone(item)"
-                  >
-                    {{ item.is_done ? 'Wieder öffnen' : 'Als erledigt markieren' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-sm"
+                  />
+                  <EditButton
+                    label="Arbeitsbericht bearbeiten"
+                    icon="edit"
                     @click="ctx.openEditImpl(item)"
-                  >
-                    Bearbeiten
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-danger"
+                  />
+                  <EditButton
+                    label="Arbeitsbericht löschen"
+                    icon="delete"
+                    variant="danger"
                     @click="ctx.deleteImpl(item)"
-                  >
-                    Löschen
-                  </button>
+                  />
                 </div>
               </div>
             </div>
@@ -258,14 +260,13 @@ const phase3Partial = computed(
                 </div>
               </div>
             </div>
-            <button
+            <EditButton
               v-if="ctx.auth.isTrainer"
-              type="button"
-              class="btn btn-primary btn-sm"
+              label="Bewertung erfassen"
+              icon="plus"
+              variant="primary"
               @click="ctx.openNewEval(project, '', 'eval')"
-            >
-              + Bewertung erfassen
-            </button>
+            />
           </div>
 
           <div class="phase-content">
@@ -310,20 +311,18 @@ const phase3Partial = computed(
                 </div>
 
                 <div v-if="ctx.auth.isTrainer" class="flex-gap">
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-primary"
+                  <EditButton
+                    :label="ev.eval_text ? 'Bewertung anpassen' : 'Jetzt bewerten'"
+                    icon="edit"
+                    variant="primary"
                     @click="ctx.openEditEval(ev, 'eval')"
-                  >
-                    {{ ev.eval_text ? 'Bewertung anpassen' : 'Jetzt bewerten' }}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-danger"
+                  />
+                  <EditButton
+                    label="Bewertung löschen"
+                    icon="delete"
+                    variant="danger"
                     @click="ctx.deleteEval(ev)"
-                  >
-                    Löschen
-                  </button>
+                  />
                 </div>
               </div>
             </div>
@@ -341,14 +340,13 @@ const phase3Partial = computed(
             <h4 style="margin: 0">Teilprojekte ({{ subprojects.length }})</h4>
             <span class="text-muted">Untergeordnete Teilaufgaben oder Ausbildungsabschnitte</span>
           </div>
-          <button
+          <EditButton
             v-if="ctx.auth.isTrainer"
-            type="button"
-            class="btn btn-sm"
+            label="Teilprojekt hinzufügen"
+            icon="folder-plus"
+            variant="primary"
             @click="ctx.openNewProject(project.id)"
-          >
-            + Teilprojekt hinzufügen
-          </button>
+          />
         </div>
 
         <div v-if="subprojects.length > 0">
@@ -435,15 +433,15 @@ const phase3Partial = computed(
 }
 
 .phase-1 {
-  border-left: 4px solid #1d4ed8;
+  border-left: 4px solid var(--color-primary);
 }
 
 .phase-2 {
-  border-left: 4px solid #b45309;
+  border-left: 4px solid var(--color-warning);
 }
 
 .phase-3 {
-  border-left: 4px solid #15803d;
+  border-left: 4px solid var(--color-success);
 }
 
 .phase-header {
@@ -472,15 +470,15 @@ const phase3Partial = computed(
 }
 
 .phase-1 .phase-number {
-  background: #1d4ed8;
+  background: var(--color-primary);
 }
 
 .phase-2 .phase-number {
-  background: #b45309;
+  background: var(--color-warning);
 }
 
 .phase-3 .phase-number {
-  background: #15803d;
+  background: var(--color-success);
 }
 
 .phase-title {
