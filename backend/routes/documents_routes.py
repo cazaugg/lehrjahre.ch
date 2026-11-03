@@ -31,6 +31,7 @@ VALID_TYPES = {
     "vertrag",
     "bewerbung",
     "profilbild",
+    "projekt",
     "sonstiges",
 }
 

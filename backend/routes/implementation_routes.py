@@ -59,21 +59,79 @@ def create_implementation():
 
     data = request.get_json(silent=True) or {}
     project_id = data.get("project")
-    title = (data.get("title") or "").strip()
-    if not project_id or not title:
-        return jsonify({"error": "Projekt und Titel sind erforderlich."}), 400
+    if not project_id:
+        return jsonify({"error": "Projekt / Aufgabe ist erforderlich."}), 400
 
     project = db.session.get(Project, int(project_id))
     if not project or not can_view_project(actor, project):
         return jsonify({"error": "Projekt nicht gefunden oder nicht freigegeben."}), 404
 
+    root_project = (
+        db.session.get(Project, project.parent_project)
+        if project.parent_project
+        else project
+    )
+    if not root_project or not (
+        root_project.is_published or root_project.planning_released
+    ):
+        return jsonify({"error": "Projekt ist noch nicht freigegeben."}), 403
+    if root_project.is_completed:
+        return jsonify({"error": "Das Projekt ist bereits abgeschlossen."}), 400
+
+    # If the root project has subtasks, submissions must be on a subtask
+    if not project.parent_project:
+        subtask_count = Project.query.filter_by(parent_project=project.id).count()
+        if subtask_count > 0:
+            return jsonify(
+                {
+                    "error": "Dieses Projekt hat Teilaufgaben. Bitte reichen Sie Ihre Arbeit pro Aufgabe ein."
+                }
+            ), 400
+
+    student_id = actor.id
+    part = Participation.query.filter_by(
+        student=student_id, project=project.id
+    ).first()
+
+    if part and part.is_done:
+        return jsonify(
+            {
+                "error": "Nach der Abgabe kann nichts mehr geändert werden. Nur der/die Berufsbildner/in kann die Freigabe rückgängig machen."
+            }
+        ), 403
+
+    text = (data.get("text") or "").strip() if "text" in data else (part.text if part else "")
+    doc_id = (
+        (int(data["document_id"]) if data.get("document_id") else None)
+        if "document_id" in data
+        else (part.document_id if part else None)
+    )
+    is_done = bool(data.get("is_done", False))
+    title = (data.get("title") or "").strip() or project.title
+
+    if is_done and not text and not doc_id:
+        return jsonify(
+            {
+                "error": "Für die Abgabe muss mindestens ein Text oder ein Dokument eingereicht werden."
+            }
+        ), 400
+
+    if part:
+        part.title = title
+        part.text = text
+        part.document_id = doc_id
+        part.is_done = is_done
+        db.session.commit()
+        return jsonify({"data": part.to_dict()}), 200
+
     part = Participation(
-        supervisor=project.author,
-        student=actor.id,
+        supervisor=root_project.author or project.author,
+        student=student_id,
         project=project.id,
         title=title,
-        text=(data.get("text") or "").strip(),
-        is_done=bool(data.get("is_done", False)),
+        text=text,
+        document_id=doc_id,
+        is_done=is_done,
     )
     db.session.add(part)
     db.session.commit()
@@ -86,37 +144,65 @@ def update_implementation(part_id):
     actor = get_current_user()
     part = db.session.get(Participation, part_id)
     if not part:
-        return jsonify({"error": "Aufgabe / Bericht nicht gefunden."}), 404
+        return jsonify({"error": "Abgabe nicht gefunden."}), 404
 
     if not can_access_student(actor, part.student) or not can_view_project(
         actor, part.project_rel
     ):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
+    project = db.session.get(Project, part.project)
+    root_project = (
+        db.session.get(Project, project.parent_project)
+        if project and project.parent_project
+        else project
+    )
+    if root_project and root_project.is_completed:
+        return jsonify({"error": "Das Projekt ist bereits abgeschlossen."}), 400
+
     data = request.get_json(silent=True) or {}
 
     if is_student(actor):
+        if part.student != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
         if part.is_done:
             return jsonify(
                 {
-                    "error": "Abgegebene Arbeitsberichte können von Lernenden nicht mehr bearbeitet oder wieder geöffnet werden."
+                    "error": "Nach der Abgabe kann nichts mehr geändert werden. Nur der/die Berufsbildner/in kann die Freigabe rückgängig machen."
                 }
             ), 403
-        if "title" in data and data["title"].strip():
+
+        if "title" in data and (data.get("title") or "").strip():
             part.title = data["title"].strip()
         if "text" in data:
             part.text = (data.get("text") or "").strip()
-        if "is_done" in data and bool(data.get("is_done")):
-            part.is_done = True
+        if "document_id" in data:
+            part.document_id = (
+                int(data["document_id"]) if data.get("document_id") else None
+            )
+        if "is_done" in data:
+            new_done = bool(data.get("is_done"))
+            if new_done and not part.text and not part.document_id:
+                return jsonify(
+                    {
+                        "error": "Für die Abgabe muss mindestens ein Text oder ein Dokument eingereicht werden."
+                    }
+                ), 400
+            part.is_done = new_done
     elif is_supervisor(actor):
         # Supervisors can only view the report content, but can change submission status (is_done)
         has_title_change = (
-            "title" in data and data["title"].strip() != part.title
+            "title" in data
+            and (data.get("title") or "").strip() != (part.title or "")
         )
         has_text_change = (
             "text" in data and (data.get("text") or "").strip() != (part.text or "")
         )
-        if has_title_change or has_text_change:
+        new_doc_id = (
+            int(data["document_id"]) if data.get("document_id") else None
+        )
+        has_doc_change = "document_id" in data and new_doc_id != part.document_id
+        if has_title_change or has_text_change or has_doc_change:
             return jsonify(
                 {
                     "error": "Die Projektdurchführung kann von Vorgesetzten nur angezeigt werden."
@@ -126,6 +212,8 @@ def update_implementation(part_id):
             part.is_done = bool(data.get("is_done"))
         if "supervisor" in data:
             part.supervisor = int(data["supervisor"]) if data["supervisor"] else None
+    else:
+        return jsonify({"error": "Keine Berechtigung."}), 403
 
     db.session.commit()
     return jsonify({"data": part.to_dict()})

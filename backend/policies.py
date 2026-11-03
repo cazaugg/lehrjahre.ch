@@ -176,7 +176,12 @@ def visible_project_ids_for(actor: User | None) -> set[int]:
                 for r in Eval.query.filter(Eval.student.in_(sub_ids)).all()
                 if r.project in proj_map
             }
-            direct_ids |= part_pids | eval_pids
+            assigned_pids = {
+                pid
+                for pid, p in proj_map.items()
+                if set(p.parsed_assigned_students()) & sub_ids
+            }
+            direct_ids |= part_pids | eval_pids | assigned_pids
 
         # Include descendants of visible projects and ancestors up to root
         visible = set(direct_ids)
@@ -203,18 +208,23 @@ def visible_project_ids_for(actor: User | None) -> set[int]:
             for r in Eval.query.filter_by(student=actor.id).all()
             if r.project in proj_map
         }
+        assigned_pids = {
+            pid
+            for pid, p in proj_map.items()
+            if actor.id in p.parsed_assigned_students()
+        }
         participating_pids = {
             pid
-            for pid in (part_pids | eval_pids)
-            if proj_map[pid].planning_released
+            for pid in (part_pids | eval_pids | assigned_pids)
+            if proj_map[pid].planning_released or proj_map[pid].is_published
         }
         visible = set(participating_pids)
-        # Walk up parent_project chain ONLY if ancestor also has planning_released == True
+        # Walk up parent_project chain ONLY if ancestor is also released
         for pid in list(participating_pids):
             curr = proj_map.get(pid)
             while curr and curr.parent_project:
                 parent = proj_map.get(curr.parent_project)
-                if parent and parent.planning_released:
+                if parent and (parent.planning_released or parent.is_published):
                     visible.add(parent.id)
                     curr = parent
                 else:
@@ -240,7 +250,7 @@ def can_manage_project(actor: User | None, project: Project | None) -> bool:
 def serialize_eval(evaluation: Eval, actor: User | None) -> dict:
     """Mask eval_text for students until eval_released is True."""
     data = evaluation.to_dict()
-    if is_student(actor) and not evaluation.eval_released:
+    if is_student(actor) and not (evaluation.eval_released or evaluation.is_released):
         data["eval_text"] = ""
     return data
 
@@ -272,6 +282,15 @@ def can_view_document(actor: User | None, doc: Documents | None) -> bool:
 
     # Profile pictures belong to company contact data -> visible within company
     if doc.type == "profilbild":
+        return True
+
+    # Trainer-owned project documents are part of the project assignment and
+    # must be readable by the assigned students.
+    owner_user = db.session.get(User, doc.owner)
+    if doc.type == "projekt" and owner_user and owner_user.role == "ausbildner":
+        return True
+
+    if doc.author == actor.id:
         return True
 
     # Templates in the same company

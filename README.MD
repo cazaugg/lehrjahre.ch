@@ -38,8 +38,10 @@ Starts Flask and Vite together, installs missing dependencies, and prints both U
 Seed demo data once (skipped if the database already has users):
 
 ```bash
-uv run python -m backend.seed
+npm run seed
 ```
+
+(This is equivalent to `uv run python -m backend.seed`.)
 
 Create another company (tenant) before adding its users:
 
