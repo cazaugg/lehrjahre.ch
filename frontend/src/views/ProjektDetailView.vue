@@ -307,7 +307,7 @@ function formatDate(d) {
           </p>
         </div>
 
-        <div v-if="auth.isTrainer" class="flex-gap">
+        <div v-if="project.can_manage" class="flex-gap">
           <router-link :to="`/projekte/${project.id}/planung`" class="btn">
             Planung bearbeiten
           </router-link>
@@ -607,7 +607,7 @@ function formatDate(d) {
                 <!-- Berufsbildner kann die Freigabe rückgängig machen -->
                 <div
                   v-if="
-                    auth.isTrainer &&
+                    project.can_manage &&
                     getParticipation(target.id).is_done &&
                     !project.is_completed
                   "
@@ -639,7 +639,7 @@ function formatDate(d) {
             </span>
           </div>
           <router-link
-            v-if="auth.isTrainer"
+            v-if="project.can_manage"
             :to="`/projekte/${project.id}/auswertung`"
             class="btn btn-sm btn-primary"
           >

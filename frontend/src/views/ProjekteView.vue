@@ -162,14 +162,14 @@ function formatDate(d) {
             Projekt öffnen
           </router-link>
           <router-link
-            v-if="auth.isTrainer"
+            v-if="proj.can_manage"
             :to="`/projekte/${proj.id}/planung`"
             class="btn btn-sm"
           >
             Planung
           </router-link>
           <router-link
-            v-if="auth.isTrainer"
+            v-if="proj.can_manage"
             :to="`/projekte/${proj.id}/auswertung`"
             class="btn btn-sm btn-primary"
           >

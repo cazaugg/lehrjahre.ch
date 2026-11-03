@@ -1,6 +1,6 @@
 from datetime import date
 from flask import Blueprint, request, jsonify, g
-from backend.models import db, User, UserRelation
+from backend.models import db, User, UserRelation, Project, Documents
 from backend.auth import (
     login_required,
     role_required,
@@ -159,7 +159,9 @@ def create_user():
         start_date=parse_date(data.get("start_date")),
         end_date=parse_date(data.get("end_date")),
         job_title=job_title,
-        picture_document=data.get("picture_document"),
+        # A profile picture can only reference an existing document owned by
+        # this user; that is set after the account exists via PUT /api/user.
+        picture_document=None,
     )
     db.session.add(new_user)
     db.session.commit()
@@ -230,7 +232,22 @@ def update_user(user_id):
     if "picture_document" in data:
         if actor.id != target.id and not can_edit_user_contacts(actor, target):
             return jsonify({"error": "Keine Berechtigung."}), 403
-        target.picture_document = data.get("picture_document")
+        raw_picture = data.get("picture_document")
+        if raw_picture in (None, ""):
+            target.picture_document = None
+        else:
+            try:
+                picture_id = int(raw_picture)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Ungültiges Profilbild."}), 400
+            picture = db.session.get(Documents, picture_id)
+            if (
+                not picture
+                or picture.type != "profilbild"
+                or picture.owner != target.id
+            ):
+                return jsonify({"error": "Ungültiges Profilbild."}), 400
+            target.picture_document = picture.id
 
     if has_master_edits and can_edit_student_master_data(actor, target):
         if "name" in data and data["name"]:
@@ -295,6 +312,12 @@ def delete_user(user_id):
 
     if target.role == "lernender" and not can_edit_student_master_data(actor, target):
         return jsonify({"error": "Keine Berechtigung."}), 403
+
+    # Projects must keep an author in the company; never leave orphaned rows
+    # that could later become visible across company boundaries.
+    Project.query.filter_by(author=target.id).update(
+        {Project.author: actor.id}, synchronize_session=False
+    )
 
     db.session.delete(target)
     db.session.commit()

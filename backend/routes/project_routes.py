@@ -7,6 +7,8 @@ from backend.policies import (
     visible_project_ids_for,
     can_view_project,
     can_manage_project,
+    manageable_project_ids_for,
+    serialize_project,
 )
 
 bp = Blueprint("api_project", __name__, url_prefix="/api/project")
@@ -54,7 +56,7 @@ def serialize_students(students_input) -> str:
 def student_can_view_project(actor: User, root_project: Project) -> bool:
     if actor.role == "ausbildner":
         return True
-    if not root_project.is_published:
+    if not (root_project.is_published or root_project.planning_released):
         return False
     assigned = root_project.parsed_assigned_students()
     if assigned and actor.id not in assigned:
@@ -68,8 +70,9 @@ def enrich_project_dict(
     all_tasks: list[Project],
     user_map: dict[int, User],
     include_details: bool = False,
+    manageable_ids: set[int] | None = None,
 ) -> dict:
-    d = project.to_dict()
+    d = serialize_project(project, actor, manageable_ids)
     assigned_ids = d["assigned_students"]
     d["assigned_student_users"] = [
         {
@@ -82,7 +85,9 @@ def enrich_project_dict(
     ]
     tasks = [t for t in all_tasks if t.parent_project == project.id]
     tasks.sort(key=lambda x: x.id)
-    d["tasks"] = [t.to_dict() for t in tasks]
+    d["tasks"] = [
+        serialize_project(t, actor, manageable_ids) for t in tasks
+    ]
 
     if include_details:
         project_and_task_ids = [project.id] + [t.id for t in tasks]
@@ -192,6 +197,7 @@ def list_projects():
         .order_by(Project.start_date.desc().nullslast(), Project.id.desc())
         .all()
     )
+    manageable_ids = manageable_project_ids_for(actor)
 
     root_projects = [p for p in projects if not p.parent_project]
     all_tasks = [p for p in projects if p.parent_project]
@@ -204,7 +210,12 @@ def list_projects():
         {
             "data": [
                 enrich_project_dict(
-                    p, actor, all_tasks, user_map, include_details=True
+                    p,
+                    actor,
+                    all_tasks,
+                    user_map,
+                    include_details=True,
+                    manageable_ids=manageable_ids,
                 )
                 for p in visible_roots
             ]
@@ -219,7 +230,6 @@ def get_project(project_id):
     project = db.session.get(Project, project_id)
     if not project or not can_view_project(actor, project):
         return jsonify({"error": "Projekt nicht gefunden."}), 404
-
     root = (
         db.session.get(Project, project.parent_project)
         if project.parent_project
@@ -239,7 +249,12 @@ def get_project(project_id):
     return jsonify(
         {
             "data": enrich_project_dict(
-                project, actor, all_tasks, user_map, include_details=True
+                project,
+                actor,
+                all_tasks,
+                user_map,
+                include_details=True,
+                manageable_ids=manageable_project_ids_for(actor),
             )
         }
     )
@@ -299,7 +314,6 @@ def create_project():
         _sync_subtasks(project, data["tasks"], actor.id)
 
     db.session.commit()
-
     company_users = User.query.filter_by(company_id=actor.company_id).all()
     user_map = {u.id: u for u in company_users}
     all_tasks = Project.query.filter_by(parent_project=project.id).all()
@@ -307,7 +321,12 @@ def create_project():
         jsonify(
             {
                 "data": enrich_project_dict(
-                    project, actor, all_tasks, user_map, include_details=True
+                    project,
+                    actor,
+                    all_tasks,
+                    user_map,
+                    include_details=True,
+                    manageable_ids=manageable_project_ids_for(actor),
                 )
             }
         ),
@@ -379,14 +398,18 @@ def update_project(project_id):
             child.assigned_students = project.assigned_students
 
     db.session.commit()
-
     company_users = User.query.filter_by(company_id=actor.company_id).all()
     user_map = {u.id: u for u in company_users}
     all_tasks = Project.query.filter_by(parent_project=project.id).all()
     return jsonify(
         {
             "data": enrich_project_dict(
-                project, actor, all_tasks, user_map, include_details=True
+                project,
+                actor,
+                all_tasks,
+                user_map,
+                include_details=True,
+                manageable_ids=manageable_project_ids_for(actor),
             )
         }
     )

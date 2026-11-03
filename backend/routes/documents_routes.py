@@ -267,7 +267,11 @@ def update_document(doc_id):
     elif doc.type in {"zeugnis", "kursnachweis"}:
         if is_student(actor) and doc.owner != actor.id:
             return jsonify({"error": "Keine Berechtigung."}), 403
-        if is_supervisor(actor) and not is_supervisor_of(actor, doc.owner):
+        if (
+            is_supervisor(actor)
+            and doc.owner != actor.id
+            and not is_supervisor_of(actor, doc.owner)
+        ):
             return jsonify({"error": "Keine Berechtigung."}), 403
     elif doc.type == "wissen":
         if doc.owner != actor.id:
