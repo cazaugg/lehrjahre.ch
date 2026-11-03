@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Frontend:** Added a read-only Word (`.docx`) preview in document views using lazy-loaded `docx-preview`; other binary files keep the existing open/download fallback.
+- **Frontend:** Added a read-only PDF preview using the browser's native PDF viewer, plus a generated 2-page PDF example in the seed data.
 - **Tooling:** Upgraded to Node.js 26 LTS and Python 3.14; refreshed frontend dependencies (Vite 8, Vue Router 5, Pinia 4) and backend dependencies (Flask 3.1, Werkzeug 3.1, argon2-cffi 25, pytest 9).
 - **Tooling:** Switched backend environment and dependency management to uv (`pyproject.toml` + `uv.lock`); removed `backend/requirements.txt`.
 - **Tooling:** Added root `npm run dev` to start Flask and Vite together, with free-port detection and automatic dependency bootstrap.

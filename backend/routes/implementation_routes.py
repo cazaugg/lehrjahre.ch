@@ -1,6 +1,13 @@
 from flask import Blueprint, request, jsonify
-from backend.models import db, Participation, Project, User
+from backend.models import db, Participation, Project
 from backend.auth import login_required, get_current_user, can_access_student
+from backend.policies import (
+    is_supervisor,
+    is_student,
+    supervised_student_ids,
+    visible_project_ids_for,
+    can_view_project,
+)
 
 bp = Blueprint("api_implementation", __name__, url_prefix="/api/implementation")
 
@@ -12,22 +19,25 @@ def list_implementations():
     student_id = request.args.get("student", type=int)
     project_id = request.args.get("project", type=int)
 
-    if actor.role == "lernender":
-        student_id = actor.id
+    visible_pids = visible_project_ids_for(actor)
+    if not visible_pids:
+        return jsonify({"data": []})
 
-    query = Participation.query
-    if student_id:
+    query = Participation.query.filter(Participation.project.in_(visible_pids))
+
+    if is_student(actor):
+        if student_id and student_id != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+        query = query.filter_by(student=actor.id)
+    elif student_id:
         if not can_access_student(actor, student_id):
             return jsonify({"error": "Keine Berechtigung."}), 403
         query = query.filter_by(student=student_id)
     else:
-        company_student_ids = [
-            u.id
-            for u in User.query.filter_by(
-                company=actor.company, role="lernender"
-            ).all()
-        ]
-        query = query.filter(Participation.student.in_(company_student_ids))
+        sub_ids = supervised_student_ids(actor)
+        if not sub_ids:
+            return jsonify({"data": []})
+        query = query.filter(Participation.student.in_(sub_ids))
 
     if project_id:
         query = query.filter_by(project=project_id)
@@ -40,10 +50,10 @@ def list_implementations():
 @login_required
 def create_implementation():
     actor = get_current_user()
-    if actor.role != "lernender":
+    if not is_student(actor):
         return jsonify(
             {
-                "error": "Die Durchführung wird ausschliesslich von Lernenden erfasst. Vorgesetzte haben Leserechte."
+                "error": "Arbeitsberichte (Projektdurchführung) können nur von Lernenden erfasst werden."
             }
         ), 403
 
@@ -53,15 +63,17 @@ def create_implementation():
         return jsonify({"error": "Projekt / Aufgabe ist erforderlich."}), 400
 
     project = db.session.get(Project, int(project_id))
-    if not project:
-        return jsonify({"error": "Projekt / Aufgabe nicht gefunden."}), 404
+    if not project or not can_view_project(actor, project):
+        return jsonify({"error": "Projekt nicht gefunden oder nicht freigegeben."}), 404
 
     root_project = (
         db.session.get(Project, project.parent_project)
         if project.parent_project
         else project
     )
-    if not root_project or not root_project.is_published:
+    if not root_project or not (
+        root_project.is_published or root_project.planning_released
+    ):
         return jsonify({"error": "Projekt ist noch nicht freigegeben."}), 403
     if root_project.is_completed:
         return jsonify({"error": "Das Projekt ist bereits abgeschlossen."}), 400
@@ -134,7 +146,9 @@ def update_implementation(part_id):
     if not part:
         return jsonify({"error": "Abgabe nicht gefunden."}), 404
 
-    if not can_access_student(actor, part.student):
+    if not can_access_student(actor, part.student) or not can_view_project(
+        actor, part.project_rel
+    ):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     project = db.session.get(Project, part.project)
@@ -148,44 +162,58 @@ def update_implementation(part_id):
 
     data = request.get_json(silent=True) or {}
 
-    if actor.role == "ausbildner":
-        # Trainers have read-only access on Durchführung, except they can undo student submission (is_done -> False)
-        if set(data.keys()) <= {"is_done"} and data.get("is_done") is False:
-            part.is_done = False
-            db.session.commit()
-            return jsonify({"data": part.to_dict()})
-        return jsonify(
-            {
-                "error": "Vorgesetzte haben bei der Durchführung nur Leserechte und können lediglich die Freigabe/Abgabe rückgängig machen."
-            }
-        ), 403
-
-    # Actor is student
-    if part.student != actor.id:
-        return jsonify({"error": "Keine Berechtigung."}), 403
-
-    if part.is_done:
-        return jsonify(
-            {
-                "error": "Nach der Abgabe kann nichts mehr geändert werden. Nur der/die Berufsbildner/in kann die Freigabe rückgängig machen."
-            }
-        ), 403
-
-    if "title" in data and data["title"].strip():
-        part.title = data["title"].strip()
-    if "text" in data:
-        part.text = (data.get("text") or "").strip()
-    if "document_id" in data:
-        part.document_id = int(data["document_id"]) if data.get("document_id") else None
-    if "is_done" in data:
-        new_done = bool(data.get("is_done"))
-        if new_done and not part.text and not part.document_id:
+    if is_student(actor):
+        if part.student != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+        if part.is_done:
             return jsonify(
                 {
-                    "error": "Für die Abgabe muss mindestens ein Text oder ein Dokument eingereicht werden."
+                    "error": "Nach der Abgabe kann nichts mehr geändert werden. Nur der/die Berufsbildner/in kann die Freigabe rückgängig machen."
                 }
-            ), 400
-        part.is_done = new_done
+            ), 403
+
+        if "title" in data and (data.get("title") or "").strip():
+            part.title = data["title"].strip()
+        if "text" in data:
+            part.text = (data.get("text") or "").strip()
+        if "document_id" in data:
+            part.document_id = (
+                int(data["document_id"]) if data.get("document_id") else None
+            )
+        if "is_done" in data:
+            new_done = bool(data.get("is_done"))
+            if new_done and not part.text and not part.document_id:
+                return jsonify(
+                    {
+                        "error": "Für die Abgabe muss mindestens ein Text oder ein Dokument eingereicht werden."
+                    }
+                ), 400
+            part.is_done = new_done
+    elif is_supervisor(actor):
+        # Supervisors can only view the report content, but can change submission status (is_done)
+        has_title_change = (
+            "title" in data
+            and (data.get("title") or "").strip() != (part.title or "")
+        )
+        has_text_change = (
+            "text" in data and (data.get("text") or "").strip() != (part.text or "")
+        )
+        new_doc_id = (
+            int(data["document_id"]) if data.get("document_id") else None
+        )
+        has_doc_change = "document_id" in data and new_doc_id != part.document_id
+        if has_title_change or has_text_change or has_doc_change:
+            return jsonify(
+                {
+                    "error": "Die Projektdurchführung kann von Vorgesetzten nur angezeigt werden."
+                }
+            ), 403
+        if "is_done" in data:
+            part.is_done = bool(data.get("is_done"))
+        if "supervisor" in data:
+            part.supervisor = int(data["supervisor"]) if data["supervisor"] else None
+    else:
+        return jsonify({"error": "Keine Berechtigung."}), 403
 
     db.session.commit()
     return jsonify({"data": part.to_dict()})
@@ -199,11 +227,11 @@ def delete_implementation(part_id):
     if not part:
         return jsonify({"error": "Eintrag nicht gefunden."}), 404
 
-    if actor.role != "lernender" or part.student != actor.id:
+    if not is_student(actor) or part.student != actor.id:
         return jsonify({"error": "Keine Berechtigung."}), 403
     if part.is_done:
         return jsonify(
-            {"error": "Abgegebene Durchführungen können nicht gelöscht werden."}
+            {"error": "Abgegebene Arbeitsberichte können nicht gelöscht werden."}
         ), 403
 
     db.session.delete(part)

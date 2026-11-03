@@ -155,6 +155,7 @@ function startEditPerson(person) {
   }
   profileDraft.id = person.id
   editingPersonId.value = person.id
+  expandedIds.value[person.id] = true
 }
 
 function cancelEditPerson() {
@@ -220,12 +221,21 @@ function formatDate(d) {
         </p>
       </div>
       <div v-if="auth.isAdminOrHr" class="flex-gap">
-        <button type="button" class="btn" @click="openCreateUser('ausbildner')">
-          + Ausbildner/in erfassen
-        </button>
-        <button type="button" class="btn btn-primary" @click="openCreateUser('lernender')">
-          + Lernende/n erfassen
-        </button>
+        <EditButton
+          size="lg"
+          show-label
+          icon="user-plus"
+          label="Ausbildner/in erfassen"
+          @click="openCreateUser('ausbildner')"
+        />
+        <EditButton
+          size="lg"
+          show-label
+          icon="user-plus"
+          variant="primary"
+          label="Lernende/n erfassen"
+          @click="openCreateUser('lernender')"
+        />
       </div>
     </div>
 
@@ -294,71 +304,143 @@ function formatDate(d) {
             </div>
           </div>
 
-          <div class="flex-gap">
+          <div class="flex-gap" @click.stop>
             <span v-if="person.role === 'ausbildner'" class="badge badge-success">
               {{ studentsForSupervisor(person.id).length }} betreute Lernende
             </span>
             <span v-else class="badge badge-info">
               {{ supervisorsForStudent(person.id).length }} Ausbildner
             </span>
+            <EditButton
+              v-if="person.can_edit_contacts"
+              label="Kontaktdaten / Stammdaten bearbeiten"
+              icon="edit"
+              @click="startEditPerson(person)"
+            />
           </div>
         </div>
 
         <div v-if="expandedIds[person.id]" class="collapsible-body">
           <!-- Ausbildner -->
-          <div v-if="person.role === 'ausbildner'" class="contact-grid">
-            <div class="contact-card">
-              <h4>Betrieb ({{ person.company }})</h4>
-              <div class="text-muted">{{ person.company_address || '–' }}</div>
-              <div>
-                <a v-if="person.company_email" :href="`mailto:${person.company_email}`">
-                  {{ person.company_email }}
-                </a>
-              </div>
-              <div class="text-muted">{{ person.company_phone || '–' }}</div>
-            </div>
+          <template v-if="person.role === 'ausbildner'">
+            <form
+              v-if="editingPersonId === person.id"
+              @submit.prevent="saveApprenticeProfile"
+            >
+              <div class="grid-3">
+                <div class="contact-card">
+                  <h4>Privat</h4>
+                  <div class="form-group">
+                    <label class="form-label">Adresse</label>
+                    <input v-model="profileDraft.private_address" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">E-Mail</label>
+                    <input v-model="profileDraft.private_email" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Telefon</label>
+                    <input v-model="profileDraft.private_phone" class="form-control" />
+                  </div>
+                </div>
 
-            <div class="contact-card">
-              <h4>Berufsfachschule / ÜK-Zentrum</h4>
-              <div class="text-muted">{{ person.school_address || '–' }}</div>
-              <div>
-                <a v-if="person.school_email" :href="`mailto:${person.school_email}`">
-                  {{ person.school_email }}
-                </a>
-              </div>
-              <div class="text-muted">{{ person.school_phone || '–' }}</div>
-            </div>
+                <div class="contact-card">
+                  <h4>Berufsfachschule / ÜK-Zentrum</h4>
+                  <div class="form-group">
+                    <label class="form-label">Schule & Adresse</label>
+                    <input v-model="profileDraft.school_address" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Schul-E-Mail</label>
+                    <input v-model="profileDraft.school_email" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Schul-Telefon</label>
+                    <input v-model="profileDraft.school_phone" class="form-control" />
+                  </div>
+                </div>
 
-            <div class="contact-card">
-              <h4>Betreute Lernende</h4>
-              <div
-                v-if="studentsForSupervisor(person.id).length === 0"
-                class="text-muted"
-              >
-                Keine direkt zugewiesenen Lernenden.
+                <div class="contact-card">
+                  <h4>Betrieb ({{ person.company }})</h4>
+                  <div class="form-group">
+                    <label class="form-label">Standort / Adresse</label>
+                    <input v-model="profileDraft.company_address" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Firmen-E-Mail</label>
+                    <input v-model="profileDraft.company_email" class="form-control" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Firmen-Telefon</label>
+                    <input v-model="profileDraft.company_phone" class="form-control" />
+                  </div>
+                </div>
               </div>
-              <div v-else class="flex-gap">
-                <span
-                  v-for="rel in studentsForSupervisor(person.id)"
-                  :key="rel.id"
-                  class="badge badge-info"
+
+              <div class="flex-gap" style="margin-top: var(--space-4)">
+                <button type="submit" class="btn btn-primary">Speichern</button>
+                <button type="button" class="btn" @click="cancelEditPerson">Abbrechen</button>
+              </div>
+            </form>
+
+            <div v-else class="contact-grid">
+              <div v-if="person.can_view_private" class="contact-card">
+                <h4>Privat</h4>
+                <div class="text-muted">{{ person.private_address || '–' }}</div>
+                <div>
+                  <a v-if="person.private_email" :href="`mailto:${person.private_email}`">
+                    {{ person.private_email }}
+                  </a>
+                </div>
+                <div class="text-muted">{{ person.private_phone || '–' }}</div>
+              </div>
+
+              <div class="contact-card">
+                <h4>Betrieb ({{ person.company }})</h4>
+                <div class="text-muted">{{ person.company_address || '–' }}</div>
+                <div>
+                  <a v-if="person.company_email" :href="`mailto:${person.company_email}`">
+                    {{ person.company_email }}
+                  </a>
+                </div>
+                <div class="text-muted">{{ person.company_phone || '–' }}</div>
+              </div>
+
+              <div class="contact-card">
+                <h4>Berufsfachschule / ÜK-Zentrum</h4>
+                <div class="text-muted">{{ person.school_address || '–' }}</div>
+                <div>
+                  <a v-if="person.school_email" :href="`mailto:${person.school_email}`">
+                    {{ person.school_email }}
+                  </a>
+                </div>
+                <div class="text-muted">{{ person.school_phone || '–' }}</div>
+              </div>
+
+              <div class="contact-card">
+                <h4>Betreute Lernende</h4>
+                <div
+                  v-if="studentsForSupervisor(person.id).length === 0"
+                  class="text-muted"
                 >
-                  {{ rel.student_name }}
-                </span>
+                  Keine direkt zugewiesenen Lernenden.
+                </div>
+                <div v-else class="flex-gap">
+                  <span
+                    v-for="rel in studentsForSupervisor(person.id)"
+                    :key="rel.id"
+                    class="badge badge-info"
+                  >
+                    {{ rel.student_name }}
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
+          </template>
 
           <!-- Lernende/r -->
           <template v-else>
-            <div class="flex-between" style="margin-bottom: var(--space-3)">
-              <h4 style="margin: 0">Stammdaten</h4>
-              <EditButton
-                v-if="auth.isAdminOrHr && editingPersonId !== person.id"
-                label="Stammdaten bearbeiten"
-                @click="startEditPerson(person)"
-              />
-            </div>
+            <h4 style="margin: 0 0 var(--space-3) 0">Stammdaten</h4>
 
             <form
               v-if="editingPersonId === person.id"
@@ -479,8 +561,8 @@ function formatDate(d) {
                 </div>
               </div>
 
-              <div class="grid-3" style="margin-top: var(--space-3)">
-                <div class="contact-card">
+              <div class="contact-grid" style="margin-top: var(--space-3)">
+                <div v-if="person.can_view_private" class="contact-card">
                   <h4>Privat</h4>
                   <div class="detail-item">
                     <div class="detail-label">Adresse</div>
@@ -550,14 +632,13 @@ function formatDate(d) {
                       rel.supervisor_job_title
                     }})
                   </span>
-                  <button
+                  <EditButton
                     v-if="auth.isTrainer"
-                    type="button"
-                    class="btn btn-sm btn-danger"
+                    label="Zuweisung entfernen"
+                    icon="delete"
+                    variant="danger"
                     @click="unlinkSupervisor(rel.id)"
-                  >
-                    ×
-                  </button>
+                  />
                 </div>
               </div>
 
@@ -572,13 +653,21 @@ function formatDate(d) {
                     {{ sup.full_name }} ({{ sup.job_title }})
                   </option>
                 </select>
-                <button type="button" class="btn" @click="linkSupervisor(person.id)">
-                  Zuweisen
-                </button>
+                <EditButton
+                  label="Ausbildner/in zuweisen"
+                  icon="plus"
+                  variant="primary"
+                  @click="linkSupervisor(person.id)"
+                />
               </div>
             </div>
 
-            <PersonDocuments :person-id="person.id" role="lernender" />
+            <PersonDocuments
+              v-if="person.id === auth.user?.id || person.is_subordinate"
+              :person-id="person.id"
+              :can-edit="Boolean(person.is_subordinate && auth.isTrainer)"
+              role="lernender"
+            />
           </template>
         </div>
       </div>
@@ -693,7 +782,7 @@ function formatDate(d) {
   font-weight: 700;
   font-size: 0.85rem;
   overflow: hidden;
-  border: 1px solid #f5c2c9;
+  border: 1px solid var(--color-primary-border);
   flex-shrink: 0;
 }
 

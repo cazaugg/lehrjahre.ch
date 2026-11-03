@@ -14,11 +14,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isTrainer = computed(() => user.value?.role === 'ausbildner')
   const isStudent = computed(() => user.value?.role === 'lernender')
-  const isAdminOrHr = computed(
-    () =>
-      user.value?.role === 'ausbildner' &&
-      ['Administrator', 'HR / Rekrutierung', 'Berufsbildner'].includes(user.value?.job_title)
-  )
+  const isAdminOrHr = computed(() => user.value?.role === 'ausbildner')
+
+  function isSubordinate(studentId) {
+    if (!isTrainer.value || !studentId) return false
+    const id = Number(studentId)
+    if (Array.isArray(user.value?.supervised_student_ids)) {
+      return user.value.supervised_student_ids.includes(id)
+    }
+    return companyStudents.value.some((s) => s.id === id)
+  }
 
   const activeStudentId = computed(() => {
     if (isStudent.value) return user.value?.id
@@ -53,8 +58,11 @@ export const useAuthStore = defineStore('auth', () => {
   async function loadCompanyStudents() {
     if (!user.value) return
     try {
-      const res = await apiFetch('/api/user?role=lernender')
+      const res = await apiFetch('/api/user?role=lernender&subordinate_only=true')
       companyStudents.value = res.users || []
+      if (user.value && user.value.role === 'ausbildner') {
+        user.value.supervised_student_ids = companyStudents.value.map((s) => s.id)
+      }
       if (!selectedStudentId.value && companyStudents.value.length > 0) {
         selectedStudentId.value = companyStudents.value[0].id
       }
@@ -100,6 +108,7 @@ export const useAuthStore = defineStore('auth', () => {
     isTrainer,
     isStudent,
     isAdminOrHr,
+    isSubordinate,
     activeStudentId,
     activeStudent,
     fetchMe,

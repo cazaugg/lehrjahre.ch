@@ -44,6 +44,22 @@ md.renderer.rules.heading_close = (tokens, idx, options, env, self) => {
   return defaultHeadingClose(tokens, idx, options, env, self)
 }
 
+// Open links in a new tab so clicking linked documents/URLs never loses editor state.
+const defaultLinkOpen =
+  md.renderer.rules.link_open ||
+  ((tokens, idx, options, env, self) =>
+    self.renderToken(tokens, idx, options))
+
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const token = tokens[idx]
+  const href = token.attrGet('href') || ''
+  if (href && !href.startsWith('#')) {
+    token.attrSet('target', '_blank')
+    token.attrSet('rel', 'noopener noreferrer')
+  }
+  return defaultLinkOpen(tokens, idx, options, env, self)
+}
+
 export function renderMarkdown(raw) {
   return md.render(String(raw || ''))
 }

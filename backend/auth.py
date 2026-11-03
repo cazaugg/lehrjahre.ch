@@ -84,26 +84,12 @@ def role_required(*roles):
 
 
 def is_admin_or_hr(user: User) -> bool:
-    return user.role == "ausbildner" and user.job_title in {
-        "Administrator",
-        "HR / Rekrutierung",
-        "Berufsbildner",
-    }
+    """All supervisors (ausbildner) have uniform supervisor permissions."""
+    return bool(user and user.role == "ausbildner")
 
 
 def can_access_student(actor: User, student_id: int) -> bool:
     """Check whether actor can view/manage data for student_id."""
-    if actor.id == student_id:
-        return True
-    student = db.session.get(User, student_id)
-    if not student or student.company != actor.company:
-        return False
-    if actor.role == "ausbildner":
-        # Trainers in the same company or explicitly linked via user_relation
-        if actor.job_title in {"Administrator", "HR / Rekrutierung", "Berufsbildner"}:
-            return True
-        rel = UserRelation.query.filter_by(
-            supervisor=actor.id, student=student_id
-        ).first()
-        return rel is not None or actor.company == student.company
-    return False
+    from backend.policies import can_access_student as policy_can_access_student
+
+    return policy_can_access_student(actor, student_id)

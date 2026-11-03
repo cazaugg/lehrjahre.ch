@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "docx-preview": "^0.4.1",
     "katex": "^0.19.1",
     "markdown-it": "^15.0.3",
     "markdown-it-texmath": "^1.0.0",

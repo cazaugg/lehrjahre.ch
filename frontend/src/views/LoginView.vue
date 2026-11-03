@@ -116,7 +116,7 @@ function fillDemo(demoEmail) {
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
-  background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
+  background: radial-gradient(circle at top, #164e78 0%, #0b2236 70%);
 }
 
 .login-card {

@@ -221,7 +221,7 @@ async function uploadProfilePhoto() {
       <div class="card-header">
         <h2>Kontaktangaben</h2>
         <EditButton
-          v-if="!editingContacts"
+          v-if="auth.isTrainer && !editingContacts"
           label="Kontaktangaben bearbeiten"
           @click="startEditContacts"
         />
@@ -359,7 +359,7 @@ async function uploadProfilePhoto() {
   font-size: 1.5rem;
   font-weight: 700;
   overflow: hidden;
-  border: 2px solid #f5c2c9;
+  border: 2px solid var(--color-primary-border);
   flex-shrink: 0;
 }
 

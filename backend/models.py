@@ -146,6 +146,8 @@ class Project(db.Model):
     is_published = db.Column(db.Boolean, default=False, nullable=False)
     is_completed = db.Column(db.Boolean, default=False, nullable=False)
     global_eval_text = db.Column(db.Text, default="")
+    # Access-management flag, kept in sync with is_published.
+    planning_released = db.Column(db.Boolean, default=False, nullable=False)
 
     author_user = db.relationship("User", foreign_keys=[author], lazy="joined")
     document = db.relationship("Documents", foreign_keys=[document_id], lazy="joined")
@@ -197,6 +199,7 @@ class Project(db.Model):
             "is_published": bool(self.is_published),
             "is_completed": bool(self.is_completed),
             "global_eval_text": self.global_eval_text or "",
+            "planning_released": bool(self.planning_released),
         }
 
 
@@ -277,6 +280,8 @@ class Eval(db.Model):
     score_type = db.Column(db.String(50), nullable=True)  # 'grade' | 'percent' | None
     score_value = db.Column(db.Float, nullable=True)
     is_released = db.Column(db.Boolean, default=False, nullable=False)
+    # Access-management flag, kept in sync with is_released.
+    eval_released = db.Column(db.Boolean, default=False, nullable=False)
 
     student_user = db.relationship("User", foreign_keys=[student], lazy="joined")
     supervisor_user = db.relationship("User", foreign_keys=[supervisor], lazy="joined")
@@ -311,6 +316,7 @@ class Eval(db.Model):
                 else None
             ),
             "is_released": bool(self.is_released),
+            "eval_released": bool(self.eval_released),
         }
 
 
@@ -375,6 +381,7 @@ class Documents(db.Model):
         db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
     is_done = db.Column(db.Boolean, default=False, nullable=False)
+    feedback = db.Column(db.Text, default="")
 
     owner_user = db.relationship("User", foreign_keys=[owner], lazy="joined")
     author_user = db.relationship("User", foreign_keys=[author], lazy="joined")
@@ -403,6 +410,7 @@ class Documents(db.Model):
                 self.updated_date.isoformat() if self.updated_date else None
             ),
             "is_done": bool(self.is_done),
+            "feedback": self.feedback or "",
         }
 
 
@@ -445,3 +453,56 @@ class Knowledge(db.Model):
             "author": doc.author if doc else None,
             "author_name": author_name,
         }
+
+
+def ensure_schema_columns():
+    """Ensure newly added columns exist on pre-existing SQLite databases."""
+    migrations = [
+        ("project", "document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
+        ("project", "assigned_students", "TEXT DEFAULT '[]'"),
+        ("project", "is_published", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("project", "is_completed", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("project", "global_eval_text", "TEXT DEFAULT ''"),
+        ("project", "planning_released", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("participation", "document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
+        ("eval", "target_type", "VARCHAR(50) NOT NULL DEFAULT 'goal'"),
+        ("eval", "score_type", "VARCHAR(50)"),
+        ("eval", "score_value", "FLOAT"),
+        ("eval", "is_released", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("eval", "eval_released", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("documents", "feedback", "TEXT DEFAULT ''"),
+    ]
+    original_cols = {}
+    added_cols = {}
+    conn = db.engine.raw_connection()
+    try:
+        cursor = conn.cursor()
+        for table, column, col_def in migrations:
+            if table not in original_cols:
+                cursor.execute(f"PRAGMA table_info({table})")
+                cols = {row[1] for row in cursor.fetchall()}
+                original_cols[table] = set(cols)
+            else:
+                cols = original_cols[table] | added_cols.get(table, set())
+            if column not in cols:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+                added_cols.setdefault(table, set()).add(column)
+
+        # Keep the legacy release flags and the access-management flags in sync
+        # when one side was introduced by this migration.
+        project_added = added_cols.get("project", set())
+        if "planning_released" in project_added and "is_published" not in project_added:
+            cursor.execute("UPDATE project SET planning_released = is_published")
+        elif "is_published" in project_added and "planning_released" not in project_added:
+            cursor.execute("UPDATE project SET is_published = planning_released")
+
+        eval_added = added_cols.get("eval", set())
+        if "eval_released" in eval_added and "is_released" not in eval_added:
+            cursor.execute("UPDATE eval SET eval_released = is_released")
+        elif "is_released" in eval_added and "eval_released" not in eval_added:
+            cursor.execute("UPDATE eval SET is_released = eval_released")
+
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()

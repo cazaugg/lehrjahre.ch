@@ -1,4 +1,6 @@
 <script setup>
+import EditButton from './EditButton.vue'
+
 defineProps({
   show: { type: Boolean, default: false },
   title: { type: String, default: '' },
@@ -12,7 +14,7 @@ const emit = defineEmits(['close'])
     <div class="modal-panel" :style="{ maxWidth: width }">
       <div class="modal-header">
         <h3>{{ title }}</h3>
-        <button type="button" class="btn btn-sm" @click="emit('close')">Schliessen</button>
+        <EditButton icon="close" label="Schliessen" @click="emit('close')" />
       </div>
       <div class="modal-body">
         <slot />

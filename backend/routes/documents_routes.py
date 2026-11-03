@@ -3,6 +3,15 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, send_file
 from backend.models import db, Documents, User
 from backend.auth import login_required, get_current_user, can_access_student
+from backend.policies import (
+    is_supervisor,
+    is_student,
+    is_supervisor_of,
+    can_view_document,
+    can_create_document,
+    can_delete_document,
+    visible_knowledge_owner_ids,
+)
 from backend.storage import (
     save_uploaded_file,
     save_text_document,
@@ -27,20 +36,6 @@ VALID_TYPES = {
 }
 
 
-def can_access_document(actor: User, doc: Documents) -> bool:
-    if doc.owner == actor.id or doc.author == actor.id:
-        return True
-    owner = db.session.get(User, doc.owner)
-    if not owner or owner.company != actor.company:
-        return False
-    # Shared templates, knowledge pages, or trainer project documents in the same company
-    if doc.is_template or doc.type in {"wissen", "profilbild"}:
-        return True
-    if doc.type == "projekt" and owner.role == "ausbildner":
-        return True
-    return can_access_student(actor, doc.owner)
-
-
 @bp.route("", methods=["GET"])
 @login_required
 def list_documents():
@@ -49,6 +44,13 @@ def list_documents():
     owner_id = request.args.get("owner", type=int)
     is_template = request.args.get("is_template")
     include_content = request.args.get("include_content") == "true"
+
+    if owner_id is not None and doc_type != "profilbild":
+        if doc_type == "wissen":
+            if owner_id not in visible_knowledge_owner_ids(actor):
+                return jsonify({"error": "Keine Berechtigung."}), 403
+        elif owner_id != actor.id and not can_access_student(actor, owner_id):
+            return jsonify({"error": "Keine Berechtigung."}), 403
 
     company_user_ids = [
         u.id for u in User.query.filter_by(company=actor.company).all()
@@ -60,22 +62,16 @@ def list_documents():
 
     if is_template is not None:
         query = query.filter_by(is_template=(is_template.lower() == "true"))
-    else:
-        if actor.role == "lernender" and doc_type not in {"wissen", "profilbild"}:
-            # Students see their own documents plus templates of that type
-            query = query.filter(
-                (Documents.owner == actor.id) | (Documents.is_template.is_(True))
-            )
-        elif owner_id:
-            if not can_access_student(actor, owner_id):
-                return jsonify({"error": "Keine Berechtigung."}), 403
-            query = query.filter(
-                (Documents.owner == owner_id) | (Documents.is_template.is_(True))
-            )
+    elif owner_id is not None:
+        query = query.filter(
+            (Documents.owner == owner_id) | (Documents.is_template.is_(True))
+        )
 
     docs = query.order_by(Documents.updated_date.desc(), Documents.id.desc()).all()
     result = []
     for d in docs:
+        if not can_view_document(actor, d):
+            continue
         item = d.to_dict()
         if include_content or d.type in {"lernjournal", "wissen", "ausbildungsgespraech"}:
             item["content"] = read_text_document(d.path)
@@ -89,7 +85,7 @@ def list_documents():
 def get_document(doc_id):
     actor = get_current_user()
     doc = db.session.get(Documents, doc_id)
-    if not doc or not can_access_document(actor, doc):
+    if not doc or not can_view_document(actor, doc):
         return jsonify({"error": "Dokument nicht gefunden."}), 404
 
     data = doc.to_dict()
@@ -102,7 +98,7 @@ def get_document(doc_id):
 def download_document(doc_id):
     actor = get_current_user()
     doc = db.session.get(Documents, doc_id)
-    if not doc or not can_access_document(actor, doc):
+    if not doc or not can_view_document(actor, doc):
         return jsonify({"error": "Dokument nicht gefunden."}), 404
 
     try:
@@ -137,6 +133,7 @@ def create_document():
         is_template = form.get("is_template", "false").lower() == "true"
         is_done = form.get("is_done", "false").lower() == "true"
         text_content = form.get("content")
+        feedback = (form.get("feedback") or "").strip()
     else:
         data = request.get_json(silent=True) or {}
         uploaded_file = None
@@ -147,15 +144,21 @@ def create_document():
         is_template = bool(data.get("is_template", False))
         is_done = bool(data.get("is_done", False))
         text_content = data.get("content")
+        feedback = (data.get("feedback") or "").strip()
 
     if doc_type not in VALID_TYPES:
         doc_type = "sonstiges"
 
-    if actor.role == "lernender":
-        owner_id = actor.id
-        is_template = False
-    elif not can_access_student(actor, owner_id):
-        return jsonify({"error": "Keine Berechtigung für diesen Eigentümer."}), 403
+    if is_student(actor):
+        if owner_id != actor.id or is_template:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+        if feedback:
+            return jsonify(
+                {"error": "Rückmeldungen können nur von Vorgesetzten erfasst werden."}
+            ), 403
+
+    if not can_create_document(actor, doc_type, owner_id, is_template=is_template):
+        return jsonify({"error": "Keine Berechtigung zum Erstellen dieses Dokuments."}), 403
 
     owner_user = db.session.get(User, owner_id)
     if not owner_user:
@@ -192,6 +195,7 @@ def create_document():
         is_template=is_template,
         updated_date=datetime.now(timezone.utc),
         is_done=is_done,
+        feedback=feedback if is_supervisor(actor) else "",
     )
     db.session.add(doc)
     db.session.commit()
@@ -207,21 +211,85 @@ def create_document():
 def update_document(doc_id):
     actor = get_current_user()
     doc = db.session.get(Documents, doc_id)
-    if not doc or not can_access_document(actor, doc):
+    if not doc or not can_view_document(actor, doc):
         return jsonify({"error": "Dokument nicht gefunden."}), 404
 
-    if actor.role == "lernender" and doc.owner != actor.id:
-        return jsonify({"error": "Keine Berechtigung."}), 403
-
     data = request.get_json(silent=True) or {}
+
+    if doc.is_template:
+        if not is_supervisor(actor):
+            return jsonify({"error": "Keine Berechtigung."}), 403
+    elif doc.type == "lernjournal":
+        if is_student(actor):
+            if doc.owner != actor.id:
+                return jsonify({"error": "Keine Berechtigung."}), 403
+            if "feedback" in data and (data.get("feedback") or "").strip() != (
+                doc.feedback or ""
+            ):
+                return jsonify(
+                    {
+                        "error": "Lernjournal-Rückmeldungen können nur von Vorgesetzten bearbeitet werden."
+                    }
+                ), 403
+        elif is_supervisor(actor):
+            if not is_supervisor_of(actor, doc.owner):
+                return jsonify({"error": "Keine Berechtigung."}), 403
+            current_content = read_text_document(doc.path)
+            has_entry_changes = (
+                ("name" in data and data["name"].strip() != doc.name)
+                or (
+                    "description" in data
+                    and (data.get("description") or "").strip()
+                    != (doc.description or "")
+                )
+                or (
+                    "content" in data
+                    and data["content"] is not None
+                    and data["content"] != current_content
+                )
+                or ("is_done" in data and bool(data.get("is_done")) != bool(doc.is_done))
+            )
+            if has_entry_changes or "feedback" not in data:
+                return jsonify(
+                    {
+                        "error": "Der Lernjournal-Eintrag selbst kann nur vom Lernenden bearbeitet werden."
+                    }
+                ), 403
+            doc.feedback = (data.get("feedback") or "").strip()
+            doc.updated_date = datetime.now(timezone.utc)
+            db.session.commit()
+            res = doc.to_dict()
+            res["content"] = current_content
+            return jsonify({"data": res})
+    elif doc.type in {"ausbildungsgespraech", "vertrag", "bewerbung"}:
+        if not is_supervisor_of(actor, doc.owner):
+            return jsonify({"error": "Keine Berechtigung."}), 403
+    elif doc.type in {"zeugnis", "kursnachweis"}:
+        if is_student(actor) and doc.owner != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+        if is_supervisor(actor) and not is_supervisor_of(actor, doc.owner):
+            return jsonify({"error": "Keine Berechtigung."}), 403
+    elif doc.type == "wissen":
+        if doc.owner != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+    else:
+        if is_student(actor) and doc.owner != actor.id:
+            return jsonify({"error": "Keine Berechtigung."}), 403
+        if is_supervisor(actor) and doc.owner != actor.id and not is_supervisor_of(
+            actor, doc.owner
+        ):
+            return jsonify({"error": "Keine Berechtigung."}), 403
+
     if "name" in data and data["name"].strip():
         doc.name = data["name"].strip()
     if "description" in data:
         doc.description = (data.get("description") or "").strip()
     if "is_done" in data:
         doc.is_done = bool(data.get("is_done"))
-    if actor.role == "ausbildner" and "is_template" in data:
+    if is_supervisor(actor) and "is_template" in data:
         doc.is_template = bool(data.get("is_template"))
+    if is_supervisor(actor) and "feedback" in data:
+        doc.feedback = (data.get("feedback") or "").strip()
 
     if "content" in data and data["content"] is not None:
         owner_user = db.session.get(User, doc.owner) or actor
@@ -243,10 +311,10 @@ def update_document(doc_id):
 def delete_document(doc_id):
     actor = get_current_user()
     doc = db.session.get(Documents, doc_id)
-    if not doc or not can_access_document(actor, doc):
+    if not doc or not can_view_document(actor, doc):
         return jsonify({"error": "Dokument nicht gefunden."}), 404
 
-    if actor.role == "lernender" and doc.owner != actor.id:
+    if not can_delete_document(actor, doc):
         return jsonify({"error": "Keine Berechtigung zum Löschen."}), 403
 
     rel_path = doc.path

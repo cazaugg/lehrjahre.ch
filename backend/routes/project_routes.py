@@ -3,6 +3,11 @@ from datetime import date
 from flask import Blueprint, request, jsonify
 from backend.models import db, Project, Participation, Eval, User
 from backend.auth import login_required, role_required, get_current_user
+from backend.policies import (
+    visible_project_ids_for,
+    can_view_project,
+    can_manage_project,
+)
 
 bp = Blueprint("api_project", __name__, url_prefix="/api/project")
 
@@ -93,17 +98,27 @@ def enrich_project_dict(
         parts = part_query.order_by(Participation.id.asc()).all()
         evals = eval_query.order_by(Eval.id.asc()).all()
 
-        if actor.role == "lernender":
-            # Students only see evaluations that have been released or when project is completed
-            visible_evals = [
-                e for e in evals if e.is_released or project.is_completed
-            ]
-            if not project.is_completed and not visible_evals:
-                d["global_eval_text"] = ""
-            evals = visible_evals
-
         d["participations"] = [p.to_dict() for p in parts]
-        d["evaluations"] = [e.to_dict() for e in evals]
+        if actor.role == "lernender":
+            # Planning is visible once the project is released, but evaluation
+            # text stays hidden until it has been explicitly released.
+            released_evals = [
+                e for e in evals if e.is_released or e.eval_released
+            ]
+            if not project.is_completed and not released_evals:
+                d["global_eval_text"] = ""
+
+            eval_dicts = []
+            for e in evals:
+                item = e.to_dict()
+                if not (
+                    e.is_released or e.eval_released or project.is_completed
+                ):
+                    item["eval_text"] = ""
+                eval_dicts.append(item)
+            d["evaluations"] = eval_dicts
+        else:
+            d["evaluations"] = [e.to_dict() for e in evals]
 
     return d
 
@@ -136,6 +151,7 @@ def _sync_subtasks(parent_project: Project, tasks_payload: list, actor_id: int):
             task.start_date = parse_date(t_data.get("start_date")) or parent_project.start_date
             task.due_date = parse_date(t_data.get("due_date")) or parent_project.due_date
             task.is_published = parent_project.is_published
+            task.planning_released = parent_project.planning_released
             task.is_completed = parent_project.is_completed
             task.assigned_students = parent_project.assigned_students
         else:
@@ -150,6 +166,7 @@ def _sync_subtasks(parent_project: Project, tasks_payload: list, actor_id: int):
                 start_date=parse_date(t_data.get("start_date")) or parent_project.start_date,
                 due_date=parse_date(t_data.get("due_date")) or parent_project.due_date,
                 is_published=parent_project.is_published,
+                planning_released=parent_project.planning_released,
                 is_completed=parent_project.is_completed,
             )
             db.session.add(new_task)
@@ -163,14 +180,15 @@ def _sync_subtasks(parent_project: Project, tasks_payload: list, actor_id: int):
 @login_required
 def list_projects():
     actor = get_current_user()
+    visible_ids = visible_project_ids_for(actor)
+    if not visible_ids:
+        return jsonify({"data": []})
+
     company_users = User.query.filter_by(company=actor.company).all()
-    company_user_ids = [u.id for u in company_users]
     user_map = {u.id: u for u in company_users}
 
     projects = (
-        Project.query.filter(
-            (Project.author.in_(company_user_ids)) | (Project.author.is_(None))
-        )
+        Project.query.filter(Project.id.in_(visible_ids))
         .order_by(Project.start_date.desc().nullslast(), Project.id.desc())
         .all()
     )
@@ -199,7 +217,7 @@ def list_projects():
 def get_project(project_id):
     actor = get_current_user()
     project = db.session.get(Project, project_id)
-    if not project:
+    if not project or not can_view_project(actor, project):
         return jsonify({"error": "Projekt nicht gefunden."}), 404
 
     root = (
@@ -239,15 +257,18 @@ def create_project():
     parent_id = data.get("parent_project")
     if parent_id:
         parent = db.session.get(Project, int(parent_id))
-        if not parent:
+        if not parent or not can_manage_project(actor, parent):
             return jsonify({"error": "Übergeordnetes Projekt nicht gefunden."}), 400
+        parent_id = parent.id
     else:
         parent_id = None
 
     description = (data.get("description") or "").strip()
     doc_id = data.get("document_id")
     doc_id = int(doc_id) if doc_id else None
-    is_published = bool(data.get("is_published", False))
+    is_published = bool(
+        data.get("is_published", data.get("planning_released", False))
+    )
 
     if is_published and not description and not doc_id:
         return jsonify(
@@ -269,6 +290,7 @@ def create_project():
         is_published=is_published,
         is_completed=bool(data.get("is_completed", False)),
         global_eval_text=(data.get("global_eval_text") or "").strip(),
+        planning_released=is_published,
     )
     db.session.add(project)
     db.session.flush()
@@ -300,6 +322,8 @@ def update_project(project_id):
     project = db.session.get(Project, project_id)
     if not project:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
+    if not can_manage_project(actor, project):
+        return jsonify({"error": "Keine Berechtigung für dieses Projekt."}), 403
 
     data = request.get_json(silent=True) or {}
     if "title" in data and data["title"].strip():
@@ -312,7 +336,10 @@ def update_project(project_id):
     if "parent_project" in data:
         parent_id = data.get("parent_project")
         if parent_id and int(parent_id) != project.id:
-            project.parent_project = int(parent_id)
+            parent = db.session.get(Project, int(parent_id))
+            if not parent or not can_manage_project(actor, parent):
+                return jsonify({"error": "Ungültiges übergeordnetes Projekt."}), 400
+            project.parent_project = parent.id
         else:
             project.parent_project = None
     if "goals" in data:
@@ -323,8 +350,12 @@ def update_project(project_id):
         project.start_date = parse_date(data.get("start_date"))
     if "due_date" in data:
         project.due_date = parse_date(data.get("due_date"))
-    if "is_published" in data:
-        project.is_published = bool(data.get("is_published"))
+    if "is_published" in data or "planning_released" in data:
+        released = bool(
+            data.get("is_published", data.get("planning_released", project.is_published))
+        )
+        project.is_published = released
+        project.planning_released = released
     if "is_completed" in data:
         project.is_completed = bool(data.get("is_completed"))
     if "global_eval_text" in data:
@@ -343,6 +374,7 @@ def update_project(project_id):
         # Keep existing child tasks in sync with publication/completion/students
         for child in Project.query.filter_by(parent_project=project.id).all():
             child.is_published = project.is_published
+            child.planning_released = project.planning_released
             child.is_completed = project.is_completed
             child.assigned_students = project.assigned_students
 
@@ -363,9 +395,12 @@ def update_project(project_id):
 @bp.route("/<int:project_id>", methods=["DELETE"])
 @role_required("ausbildner")
 def delete_project(project_id):
+    actor = get_current_user()
     project = db.session.get(Project, project_id)
     if not project:
         return jsonify({"error": "Projekt nicht gefunden."}), 404
+    if not can_manage_project(actor, project):
+        return jsonify({"error": "Keine Berechtigung für dieses Projekt."}), 403
 
     db.session.delete(project)
     db.session.commit()

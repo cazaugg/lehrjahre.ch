@@ -2,7 +2,7 @@ import os
 from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from backend.config import Config, DATA_DIR, DOCUMENTS_DIR
-from backend.models import db
+from backend.models import db, ensure_schema_columns
 from backend.auth import verify_csrf
 from backend.routes.auth_routes import bp as auth_bp
 from backend.routes.user_routes import bp as user_bp
@@ -61,45 +61,9 @@ def create_app(config_overrides: dict | None = None) -> Flask:
 
     with app.app_context():
         db.create_all()
-        _ensure_sqlite_columns()
+        ensure_schema_columns()
 
     return app
-
-
-def _ensure_sqlite_columns():
-    """Ensure new columns exist when running against an existing SQLite database."""
-    migrations = {
-        "project": [
-            ("document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
-            ("assigned_students", "TEXT DEFAULT '[]'"),
-            ("is_published", "BOOLEAN NOT NULL DEFAULT 0"),
-            ("is_completed", "BOOLEAN NOT NULL DEFAULT 0"),
-            ("global_eval_text", "TEXT DEFAULT ''"),
-        ],
-        "participation": [
-            ("document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
-        ],
-        "eval": [
-            ("target_type", " VARCHAR(50) NOT NULL DEFAULT 'goal'"),
-            ("score_type", " VARCHAR(50)"),
-            ("score_value", " FLOAT"),
-            ("is_released", " BOOLEAN NOT NULL DEFAULT 0"),
-        ],
-    }
-    conn = db.engine.raw_connection()
-    try:
-        cursor = conn.cursor()
-        for table, cols in migrations.items():
-            cursor.execute(f"PRAGMA table_info({table})")
-            existing = {row[1] for row in cursor.fetchall()}
-            if not existing:
-                continue
-            for col_name, col_def in cols:
-                if col_name not in existing:
-                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}")
-        conn.commit()
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":

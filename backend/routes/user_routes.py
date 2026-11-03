@@ -1,5 +1,5 @@
 from datetime import date
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from backend.models import db, User, UserRelation
 from backend.auth import (
     login_required,
@@ -7,10 +7,37 @@ from backend.auth import (
     get_current_user,
     hash_password,
     verify_password,
-    is_admin_or_hr,
+)
+from backend.policies import (
+    is_supervisor,
+    supervised_student_ids,
+    can_edit_user_contacts,
+    can_edit_student_master_data,
+    serialize_user,
 )
 
 bp = Blueprint("api_user", __name__, url_prefix="/api/user")
+
+CONTACT_FIELDS = [
+    "private_address",
+    "private_email",
+    "private_phone",
+    "school_address",
+    "school_email",
+    "school_phone",
+    "company_address",
+    "company_phone",
+]
+
+MASTER_FIELDS = [
+    "name",
+    "surname",
+    "job_title",
+    "role",
+    "company_email",
+    "start_date",
+    "end_date",
+]
 
 
 def parse_date(val):
@@ -29,10 +56,13 @@ def parse_date(val):
 def list_users():
     actor = get_current_user()
     role_filter = request.args.get("role")
+    subordinate_only = request.args.get("subordinate_only") == "true"
 
     query = User.query.filter_by(company=actor.company)
     if role_filter in {"lernender", "ausbildner"}:
         query = query.filter_by(role=role_filter)
+    if subordinate_only and is_supervisor(actor):
+        query = query.filter(User.id.in_(supervised_student_ids(actor)))
 
     users = query.order_by(User.start_date.desc().nullslast(), User.id.desc()).all()
     relations = (
@@ -44,7 +74,7 @@ def list_users():
     return jsonify(
         {
             "data": {
-                "users": [u.to_dict() for u in users],
+                "users": [serialize_user(u, actor) for u in users],
                 "relations": [r.to_dict() for r in relations],
             }
         }
@@ -62,7 +92,7 @@ def get_user(user_id):
     supervisors = UserRelation.query.filter_by(student=target.id).all()
     students = UserRelation.query.filter_by(supervisor=target.id).all()
 
-    data = target.to_dict()
+    data = serialize_user(target, actor)
     data["supervisors"] = [r.to_dict() for r in supervisors]
     data["students"] = [r.to_dict() for r in students]
     return jsonify({"data": data})
@@ -72,10 +102,6 @@ def get_user(user_id):
 @role_required("ausbildner")
 def create_user():
     actor = get_current_user()
-    if not is_admin_or_hr(actor):
-        return jsonify(
-            {"error": "Nur Administratoren, Berufsbildner oder HR dürfen Benutzer anlegen."}
-        ), 403
 
     data = request.get_json(silent=True) or {}
     role = (data.get("role") or "lernender").strip().lower()
@@ -90,7 +116,9 @@ def create_user():
 
     if not name or not surname or not company_email or not job_title:
         return jsonify(
-            {"error": "Vorname, Nachname, Firmen-E-Mail und Beruf/Funktion sind Pflichtfelder."}
+            {
+                "error": "Vorname, Nachname, Firmen-E-Mail und Beruf/Funktion sind Pflichtfelder."
+            }
         ), 400
 
     if User.query.filter(User.company_email.ilike(company_email)).first():
@@ -100,7 +128,7 @@ def create_user():
         role=role,
         name=name,
         surname=surname,
-        company=(data.get("company") or actor.company).strip(),
+        company=actor.company,
         password_hash=hash_password(password),
         private_address=(data.get("private_address") or "").strip(),
         private_email=(data.get("private_email") or "").strip(),
@@ -126,8 +154,10 @@ def create_user():
         if sup and sup.company == new_user.company and sup.role == "ausbildner":
             db.session.add(UserRelation(supervisor=sup.id, student=new_user.id))
             db.session.commit()
+            if hasattr(g, "_supervised_student_ids"):
+                delattr(g, "_supervised_student_ids")
 
-    return jsonify({"data": new_user.to_dict()}), 201
+    return jsonify({"data": serialize_user(new_user, actor)}), 201
 
 
 @bp.route("/<int:user_id>", methods=["PUT"])
@@ -138,31 +168,47 @@ def update_user(user_id):
     if not target or target.company != actor.company:
         return jsonify({"error": "Benutzer nicht gefunden."}), 404
 
-    if actor.id != target.id and not is_admin_or_hr(actor):
-        return jsonify({"error": "Keine Berechtigung zur Bearbeitung dieses Profils."}), 403
+    if actor.id != target.id and not can_edit_user_contacts(actor, target):
+        return jsonify(
+            {"error": "Keine Berechtigung zur Bearbeitung dieses Profils."}
+        ), 403
 
     data = request.get_json(silent=True) or {}
 
-    # Contact fields editable by user themselves or admin/HR
-    contact_fields = [
-        "private_address",
-        "private_email",
-        "private_phone",
-        "school_address",
-        "school_email",
-        "school_phone",
-        "company_address",
-        "company_phone",
-    ]
-    for field in contact_fields:
-        if field in data:
-            setattr(target, field, (data.get(field) or "").strip())
+    # Check if caller attempts to update contact fields
+    has_contact_edits = any(field in data for field in CONTACT_FIELDS)
+    if has_contact_edits and not can_edit_user_contacts(actor, target):
+        return jsonify(
+            {"error": "Keine Berechtigung zur Bearbeitung der Kontaktangaben."}
+        ), 403
+
+    # Check if caller attempts to update master data fields
+    # (Ignore company_email if passed unchanged by the disabled form field)
+    has_master_edits = any(
+        field in data
+        and not (
+            field == "company_email"
+            and (data.get("company_email") or "").strip().lower()
+            == (target.company_email or "").lower()
+        )
+        for field in MASTER_FIELDS
+    )
+    if has_master_edits and not can_edit_student_master_data(actor, target):
+        return jsonify(
+            {"error": "Keine Berechtigung zur Bearbeitung der Stammdaten."}
+        ), 403
+
+    if has_contact_edits:
+        for field in CONTACT_FIELDS:
+            if field in data:
+                setattr(target, field, (data.get(field) or "").strip())
 
     if "picture_document" in data:
+        if actor.id != target.id and not can_edit_user_contacts(actor, target):
+            return jsonify({"error": "Keine Berechtigung."}), 403
         target.picture_document = data.get("picture_document")
 
-    # Admin / HR / Berufsbildner can also update core profile fields
-    if is_admin_or_hr(actor):
+    if has_master_edits and can_edit_student_master_data(actor, target):
         if "name" in data and data["name"]:
             target.name = data["name"].strip()
         if "surname" in data and data["surname"]:
@@ -191,31 +237,31 @@ def update_user(user_id):
             return jsonify(
                 {"error": "Das neue Passwort muss mindestens 8 Zeichen lang sein."}
             ), 400
-        if actor.id == target.id and not is_admin_or_hr(actor):
+        if actor.id == target.id:
             current_pw = data.get("current_password") or ""
             if not verify_password(target.password_hash, current_pw):
                 return jsonify({"error": "Das aktuelle Passwort ist falsch."}), 400
-        elif actor.id == target.id and data.get("current_password"):
-            if not verify_password(target.password_hash, data["current_password"]):
-                return jsonify({"error": "Das aktuelle Passwort ist falsch."}), 400
+        elif not can_edit_student_master_data(actor, target):
+            return jsonify({"error": "Keine Berechtigung."}), 403
         target.password_hash = hash_password(new_pw)
 
     db.session.commit()
-    return jsonify({"data": target.to_dict()})
+    return jsonify({"data": serialize_user(target, actor)})
 
 
 @bp.route("/<int:user_id>", methods=["DELETE"])
 @role_required("ausbildner")
 def delete_user(user_id):
     actor = get_current_user()
-    if not is_admin_or_hr(actor):
-        return jsonify({"error": "Keine Berechtigung."}), 403
     if actor.id == user_id:
         return jsonify({"error": "Das eigene Konto kann nicht gelöscht werden."}), 400
 
     target = db.session.get(User, user_id)
     if not target or target.company != actor.company:
         return jsonify({"error": "Benutzer nicht gefunden."}), 404
+
+    if target.role == "lernender" and not can_edit_student_master_data(actor, target):
+        return jsonify({"error": "Keine Berechtigung."}), 403
 
     db.session.delete(target)
     db.session.commit()
@@ -235,7 +281,12 @@ def add_relation():
 
     sup = db.session.get(User, int(supervisor_id))
     stu = db.session.get(User, int(student_id))
-    if not sup or not stu or sup.company != actor.company or stu.company != actor.company:
+    if (
+        not sup
+        or not stu
+        or sup.company != actor.company
+        or stu.company != actor.company
+    ):
         return jsonify({"error": "Ungültige Benutzerzuordnung."}), 400
 
     existing = UserRelation.query.filter_by(
@@ -247,6 +298,8 @@ def add_relation():
     rel = UserRelation(supervisor=sup.id, student=stu.id)
     db.session.add(rel)
     db.session.commit()
+    if hasattr(g, "_supervised_student_ids"):
+        delattr(g, "_supervised_student_ids")
     return jsonify({"data": rel.to_dict()}), 201
 
 
@@ -264,4 +317,6 @@ def remove_relation(relation_id):
 
     db.session.delete(rel)
     db.session.commit()
+    if hasattr(g, "_supervised_student_ids"):
+        delattr(g, "_supervised_student_ids")
     return jsonify({"data": {"deleted": relation_id}})
