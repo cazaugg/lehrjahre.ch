@@ -37,7 +37,11 @@ def slugify_company(company_name: str) -> str:
 
 def get_documents_root() -> str:
     root = os.path.realpath(current_app.config["DOCUMENTS_ROOT"])
-    os.makedirs(root, exist_ok=True)
+    os.makedirs(root, mode=0o750, exist_ok=True)
+    try:
+        os.chmod(root, 0o750)
+    except OSError:
+        pass
     return root
 
 
@@ -48,7 +52,11 @@ def get_company_dir(company_name: str) -> tuple[str, str]:
     company_dir = os.path.realpath(os.path.join(root, slug))
     if not company_dir.startswith(root + os.sep):
         raise ValueError("Invalid company directory path")
-    os.makedirs(company_dir, exist_ok=True)
+    os.makedirs(company_dir, mode=0o750, exist_ok=True)
+    try:
+        os.chmod(company_dir, 0o750)
+    except OSError:
+        pass
     return slug, company_dir
 
 
@@ -79,6 +87,10 @@ def save_uploaded_file(file_storage, company_name: str) -> tuple[str, str]:
         raise PermissionError("Invalid destination path")
 
     file_storage.save(abs_path)
+    try:
+        os.chmod(abs_path, 0o640)
+    except OSError:
+        pass
     rel_path = f"{slug}/{stored_name}"
     return clean_name, rel_path
 
@@ -98,6 +110,10 @@ def save_text_document(
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content or "")
+        try:
+            os.chmod(abs_path, 0o640)
+        except OSError:
+            pass
         return clean_filename, existing_rel_path
 
     slug, company_dir = get_company_dir(company_name)
@@ -108,6 +124,10 @@ def save_text_document(
 
     with open(abs_path, "w", encoding="utf-8") as f:
         f.write(content or "")
+    try:
+        os.chmod(abs_path, 0o640)
+    except OSError:
+        pass
     rel_path = f"{slug}/{stored_name}"
     return clean_filename, rel_path
 

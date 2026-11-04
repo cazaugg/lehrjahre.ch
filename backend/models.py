@@ -105,6 +105,10 @@ class User(db.Model):
         nullable=False,
     )
     password_hash = db.Column(db.String(255), nullable=False)
+    # Incremented to revoke all existing sessions for this user.
+    session_version = db.Column(
+        db.Integer, nullable=False, default=0, server_default="0"
+    )
 
     company_rel = db.relationship(
         "Company", back_populates="users", lazy="joined"
@@ -636,6 +640,7 @@ def _migrate_company_membership(cursor):
 def ensure_schema_columns():
     """Ensure newly added columns exist on pre-existing SQLite databases."""
     migrations = [
+        ("user", "session_version", "INTEGER NOT NULL DEFAULT 0"),
         ("project", "document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
         ("project", "assigned_students", "TEXT DEFAULT '[]'"),
         ("project", "is_published", "BOOLEAN NOT NULL DEFAULT 0"),

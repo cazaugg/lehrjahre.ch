@@ -34,7 +34,9 @@ const DEFAULT_API_PORT = 5000
 const DEFAULT_WEB_PORT = 5173
 
 const rawArgs = process.argv.slice(2)
-const command = ['setup', 'help'].includes(rawArgs[0]) ? rawArgs.shift() : 'dev'
+const command = ['setup', 'seed', 'help'].includes(rawArgs[0])
+  ? rawArgs.shift()
+  : 'dev'
 const flags = new Set()
 let apiPortFlag = null
 let webPortFlag = null
@@ -266,6 +268,24 @@ function cmdSetup() {
   process.stdout.write('setup complete\n')
 }
 
+function cmdSeed() {
+  checkNode()
+  mkdirSync(path.join(ROOT, 'data'), { recursive: true })
+  ensureBackend()
+  const result = spawnSync('uv', ['run', 'python', '-m', 'backend.seed'], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      LEHRJAHRE_ENV: 'development',
+      LEHRJAHRE_DEBUG: '1',
+      COOKIE_SECURE: 'false',
+      SECRET_KEY: process.env.SECRET_KEY || 'dev-only-seed-key',
+    },
+    stdio: 'inherit',
+  })
+  process.exit(result.status ?? 1)
+}
+
 async function cmdDev() {
   checkNode()
   mkdirSync(path.join(ROOT, 'data'), { recursive: true })
@@ -298,7 +318,10 @@ async function cmdDev() {
     env: {
       ...process.env,
       LEHRJAHRE_PORT: String(apiPort),
+      LEHRJAHRE_ENV: 'development',
       LEHRJAHRE_DEBUG: '1',
+      COOKIE_SECURE: 'false',
+      SECRET_KEY: process.env.SECRET_KEY || 'dev-only-local-key',
       PYTHONUNBUFFERED: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -324,7 +347,7 @@ async function cmdDev() {
   }
 }
 
-const COMMANDS = { dev: cmdDev, setup: cmdSetup }
+const COMMANDS = { dev: cmdDev, setup: cmdSetup, seed: cmdSeed }
 const run = COMMANDS[command]
 if (!run) fail(`unknown command "${command}"`)
 

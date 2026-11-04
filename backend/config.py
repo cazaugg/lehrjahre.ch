@@ -7,8 +7,18 @@ DOCUMENTS_DIR = os.path.join(DATA_DIR, "documents")
 DB_PATH = os.path.join(DATA_DIR, "lehrjahre.db")
 
 
+INSECURE_DEFAULT_SECRET = "dev-secret-key-change-in-production"
+
+
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+    LEHRJAHRE_ENV = os.environ.get("LEHRJAHRE_ENV", "production").lower()
+    IS_DEV = LEHRJAHRE_ENV == "development"
+    DEBUG = os.environ.get("LEHRJAHRE_DEBUG", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    SECRET_KEY = os.environ.get("SECRET_KEY")
     SQLALCHEMY_DATABASE_URI = os.environ.get(
         "DATABASE_URL", f"sqlite:///{DB_PATH}"
     )
@@ -19,7 +29,7 @@ class Config:
     # Cookie & Session security
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
-    SESSION_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "false").lower() == "true"
+    SESSION_COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() == "true"
     PERMANENT_SESSION_LIFETIME = timedelta(days=7)
 
     # Constants for MEM professions and trainer functions

@@ -11,6 +11,7 @@ const email = ref('')
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const showDemo = import.meta.env.DEV
 
 async function submitLogin() {
   error.value = ''
@@ -77,7 +78,7 @@ function fillDemo(demoEmail) {
         </button>
       </form>
 
-      <div class="demo-box">
+      <div v-if="showDemo" class="demo-box">
         <div class="text-muted" style="margin-bottom: var(--space-2)">
           <strong>Schnellauswahl Demo-Zugänge:</strong>
         </div>

@@ -1,21 +1,22 @@
 from flask import Blueprint, request, jsonify
 from backend.models import db, Eval, Project, Participation
 from backend.auth import login_required, get_current_user, can_access_student
+from backend.audit import audit
 from backend.policies import (
     is_supervisor,
     is_student,
     supervised_student_ids,
     visible_project_ids_for,
     can_manage_project,
-    can_view_project,
     serialize_eval,
 )
+from backend.validation import parse_bool, parse_int, parse_str
 
 bp = Blueprint("api_evaluation", __name__, url_prefix="/api/evaluation")
 
 
 def _parse_score(score_type, score_value):
-    if not score_type or score_type not in {"grade", "percent"}:
+    if not isinstance(score_type, str) or score_type not in {"grade", "percent"}:
         return None, None
     if score_value is None or score_value == "":
         return score_type, None
@@ -73,35 +74,27 @@ def create_evaluation():
         ), 403
     data = request.get_json(silent=True) or {}
 
-    project_id = data.get("project")
-    target_type = (data.get("target_type") or "goal").strip()
-    goal = (data.get("goal") or "").strip()
-    if not project_id:
-        return jsonify({"error": "Projekt ist erforderlich."}), 400
+    project_id = parse_int(data.get("project"), "Projekt", min_value=1)
+    target_type = parse_str(data.get("target_type"), "Zieltyp") or "goal"
+    goal = parse_str(data.get("goal"), "Lernziel")
     if target_type == "goal" and not goal:
         return jsonify({"error": "Lernziel ist erforderlich."}), 400
 
-    project = db.session.get(Project, int(project_id))
+    project = db.session.get(Project, project_id)
     if not project or not can_manage_project(actor, project):
         return jsonify({"error": "Projekt nicht gefunden."}), 404
 
-    student_id = data.get("student")
-    if not student_id:
+    if data.get("student") in (None, ""):
         return jsonify({"error": "Lernende/r muss angegeben werden."}), 400
-    try:
-        student_id = int(student_id)
-    except (TypeError, ValueError):
-        return jsonify({"error": "Ungültige/r Lernende/r."}), 400
+    student_id = parse_int(data.get("student"), "Lernende/r", min_value=1)
 
     if not can_access_student(actor, student_id):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
-    participation_id = None
-    if data.get("participation") not in (None, ""):
-        try:
-            participation_id = int(data["participation"])
-        except (TypeError, ValueError):
-            return jsonify({"error": "Ungültige Teilnahme."}), 400
+    participation_id = parse_int(
+        data.get("participation"), "Teilnahme", allow_none=True, min_value=1
+    )
+    if participation_id is not None:
         participation = db.session.get(Participation, participation_id)
         if (
             not participation
@@ -113,7 +106,9 @@ def create_evaluation():
     score_type, score_value = _parse_score(
         data.get("score_type"), data.get("score_value")
     )
-    released = bool(data.get("eval_released", data.get("is_released", False)))
+    released = parse_bool(
+        data.get("eval_released", data.get("is_released")), "Freigabe"
+    )
 
     evaluation = Eval(
         project=project.id,
@@ -124,8 +119,8 @@ def create_evaluation():
         # The acting supervisor is always the recorded author; never trust a
         # client-supplied user ID here.
         supervisor=actor.id,
-        planning_text=(data.get("planning_text") or "").strip(),
-        eval_text=(data.get("eval_text") or "").strip(),
+        planning_text=parse_str(data.get("planning_text"), "Planung"),
+        eval_text=parse_str(data.get("eval_text"), "Bewertung"),
         score_type=score_type,
         score_value=score_value,
         is_released=released,
@@ -133,6 +128,13 @@ def create_evaluation():
     )
     db.session.add(evaluation)
     db.session.commit()
+    audit(
+        "evaluation_created",
+        evaluation_id=evaluation.id,
+        project_id=evaluation.project,
+        student_id=evaluation.student,
+        released=released,
+    )
     return jsonify({"data": serialize_eval(evaluation, actor)}), 201
 
 
@@ -149,25 +151,34 @@ def save_project_evaluation(project_id):
     root_project = db.session.get(Project, project_id)
     if not root_project or root_project.parent_project is not None:
         return jsonify({"error": "Hauptprojekt nicht gefunden."}), 404
+    if not can_manage_project(actor, root_project):
+        return jsonify({"error": "Keine Berechtigung für dieses Projekt."}), 403
 
     data = request.get_json(silent=True) or {}
 
+    student_id = parse_int(
+        data.get("student"), "Lernende/r", allow_none=True, min_value=1
+    )
+
     if "global_eval_text" in data:
-        root_project.global_eval_text = (data.get("global_eval_text") or "").strip()
+        root_project.global_eval_text = parse_str(
+            data.get("global_eval_text"), "Gesamtbeurteilung"
+        )
 
     if "is_completed" in data:
-        root_project.is_completed = bool(data.get("is_completed"))
+        root_project.is_completed = parse_bool(
+            data.get("is_completed"), "Abgeschlossen"
+        )
         for child in Project.query.filter_by(parent_project=root_project.id).all():
             child.is_completed = root_project.is_completed
 
-    student_id = data.get("student")
+    is_released = False
     if student_id:
-        student_id = int(student_id)
         if not can_access_student(actor, student_id):
             return jsonify({"error": "Keine Berechtigung für diese/n Lernende/n."}), 403
 
-        is_released = bool(
-            data.get("eval_released", data.get("is_released", False))
+        is_released = parse_bool(
+            data.get("eval_released", data.get("is_released")), "Freigabe"
         )
         tasks = Project.query.filter_by(parent_project=root_project.id).all()
         task_map = {t.id: t for t in tasks}
@@ -188,9 +199,10 @@ def save_project_evaluation(project_id):
                     match = ev
                     break
             parsed_type, parsed_val = _parse_score(s_type, s_val)
+            cleaned_text = parse_str(eval_text, "Bewertung")
             if match:
                 match.goal = goal_str
-                match.eval_text = (eval_text or "").strip()
+                match.eval_text = cleaned_text
                 match.score_type = parsed_type
                 match.score_value = parsed_val
                 match.is_released = is_released
@@ -203,7 +215,7 @@ def save_project_evaluation(project_id):
                     goal=goal_str,
                     student=student_id,
                     supervisor=actor.id,
-                    eval_text=(eval_text or "").strip(),
+                    eval_text=cleaned_text,
                     score_type=parsed_type,
                     score_value=parsed_val,
                     is_released=is_released,
@@ -230,9 +242,11 @@ def save_project_evaluation(project_id):
             for te in task_evals:
                 if not isinstance(te, dict):
                     continue
-                t_id = te.get("task_id")
-                if t_id and int(t_id) in task_map:
-                    task_obj = task_map[int(t_id)]
+                t_id = parse_int(
+                    te.get("task_id"), "Aufgabe", allow_none=True, min_value=1
+                )
+                if t_id and t_id in task_map:
+                    task_obj = task_map[t_id]
                     upsert_eval(
                         task_obj.id,
                         "task",
@@ -248,7 +262,7 @@ def save_project_evaluation(project_id):
             for ge in goal_evals:
                 if not isinstance(ge, dict):
                     continue
-                g_title = (ge.get("goal") or "").strip()
+                g_title = parse_str(ge.get("goal"), "Lernziel")
                 if g_title:
                     upsert_eval(
                         root_project.id,
@@ -265,6 +279,13 @@ def save_project_evaluation(project_id):
             ev.eval_released = is_released
 
     db.session.commit()
+    audit(
+        "project_evaluation_saved",
+        project_id=root_project.id,
+        student_id=student_id,
+        released=is_released,
+        completed=root_project.is_completed,
+    )
     return jsonify({"data": {"saved": True, "project_id": root_project.id}})
 
 
@@ -283,28 +304,35 @@ def update_evaluation(eval_id):
     if not evaluation:
         return jsonify({"error": "Bewertung nicht gefunden."}), 404
 
-    if not can_access_student(actor, evaluation.student) or not can_view_project(
+    if not can_access_student(actor, evaluation.student) or not can_manage_project(
         actor, evaluation.project_rel
     ):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
 
     data = request.get_json(silent=True) or {}
-    if "goal" in data and data["goal"].strip():
-        evaluation.goal = data["goal"].strip()
-    if "target_type" in data and data["target_type"]:
-        evaluation.target_type = data["target_type"]
+    if "goal" in data:
+        goal = parse_str(data.get("goal"), "Lernziel")
+        if goal:
+            evaluation.goal = goal
+    if "target_type" in data:
+        target_type = parse_str(data.get("target_type"), "Zieltyp")
+        if target_type:
+            evaluation.target_type = target_type
     if "planning_text" in data:
-        evaluation.planning_text = (data.get("planning_text") or "").strip()
+        evaluation.planning_text = parse_str(
+            data.get("planning_text"), "Planung"
+        )
     if "participation" in data:
-        raw_participation = data.get("participation")
-        if raw_participation in (None, ""):
+        participation_id = parse_int(
+            data.get("participation"),
+            "Teilnahme",
+            allow_none=True,
+            min_value=1,
+        )
+        if participation_id is None:
             evaluation.participation = None
         else:
-            try:
-                participation_id = int(raw_participation)
-            except (TypeError, ValueError):
-                return jsonify({"error": "Ungültige Teilnahme."}), 400
             participation = db.session.get(Participation, participation_id)
             if (
                 not participation
@@ -314,14 +342,16 @@ def update_evaluation(eval_id):
                 return jsonify({"error": "Ungültige Teilnahme."}), 400
             evaluation.participation = participation_id
     if "eval_text" in data:
-        evaluation.eval_text = (data.get("eval_text") or "").strip()
+        evaluation.eval_text = parse_str(data.get("eval_text"), "Bewertung")
     if "score_type" in data or "score_value" in data:
         s_type = data.get("score_type", evaluation.score_type)
         s_val = data.get("score_value", evaluation.score_value)
         evaluation.score_type, evaluation.score_value = _parse_score(s_type, s_val)
     if "is_released" in data or "eval_released" in data:
-        released = bool(
-            data.get("eval_released", data.get("is_released", evaluation.is_released))
+        released = parse_bool(
+            data.get("eval_released", data.get("is_released")),
+            "Freigabe",
+            default=bool(evaluation.is_released),
         )
         evaluation.is_released = released
         evaluation.eval_released = released
@@ -334,6 +364,13 @@ def update_evaluation(eval_id):
         evaluation.supervisor = actor.id
 
     db.session.commit()
+    audit(
+        "evaluation_updated",
+        evaluation_id=evaluation.id,
+        project_id=evaluation.project,
+        student_id=evaluation.student,
+        released=bool(evaluation.is_released),
+    )
     return jsonify({"data": serialize_eval(evaluation, actor)})
 
 
@@ -350,12 +387,20 @@ def delete_evaluation(eval_id):
     if not evaluation:
         return jsonify({"error": "Bewertung nicht gefunden."}), 404
 
-    if not can_access_student(actor, evaluation.student) or not can_view_project(
+    if not can_access_student(actor, evaluation.student) or not can_manage_project(
         actor, evaluation.project_rel
     ):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
 
+    project_id = evaluation.project
+    student_id = evaluation.student
     db.session.delete(evaluation)
     db.session.commit()
+    audit(
+        "evaluation_deleted",
+        evaluation_id=eval_id,
+        project_id=project_id,
+        student_id=student_id,
+    )
     return jsonify({"data": {"deleted": eval_id}})

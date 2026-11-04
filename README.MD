@@ -13,7 +13,7 @@ Digitale Lerndokumentation für MEM Berufslehren in der Schweiz.
 
 ## Architecture & Design Choices
 
-- **Authentication & Security:** Server-side Flask sessions with `HttpOnly`, `SameSite=Lax` cookies, Argon2id password hashing (`argon2-cffi`), and `X-CSRF-Token` validation on all state-changing API calls. Configured with `ProxyFix` for deployment behind a reverse proxy and WAF.
+- **Authentication & Security:** Signed Flask sessions with `HttpOnly`, `SameSite=Lax`, and `Secure` cookies by default, Argon2id password hashing (`argon2-cffi`), per-user session versioning for password-change/logout-all revocation, and `X-CSRF-Token` validation on all state-changing API calls. Configured with `ProxyFix` for deployment behind a reverse proxy and WAF.
 - **Database (`data/lehrjahre.db`):** SQLite via SQLAlchemy using the 9 core tables (`company`, `user`, `user_relation`, `project`, `participation`, `eval`, `grades`, `documents`, `knowledge`).
   - `company` stores the tenant name, its email domain, and the default company address.
   - Every `user` belongs to exactly one `company` via `company_id`; the company cannot be changed through the API. A user's `company_email` must match the company's `email_domain`. New users inherit `company.address` when no company address is supplied.
@@ -41,26 +41,29 @@ Seed demo data once (skipped if the database already has users):
 npm run seed
 ```
 
-(This is equivalent to `uv run python -m backend.seed`.)
+(`npm run seed` runs `backend.seed` with the development environment and a local secret.)
 
 Create another company (tenant) before adding its users:
 
 ```bash
-uv run python -m backend.companies add "Muster AG" "muster.ch" --address "Musterstrasse 1, 8000 Zürich"
-uv run python -m backend.companies list
+LEHRJAHRE_ENV=development uv run python -m backend.companies add "Muster AG" "muster.ch" --address "Musterstrasse 1, 8000 Zürich"
+LEHRJAHRE_ENV=development uv run python -m backend.companies list
 ```
 
-**Demo Accounts (Password: `Lehrjahre2026!`):**
+**Development-only demo accounts (Password: `Lehrjahre2026!`):**
 - **Berufsbildner:** `thomas.keller@vektorwerk.ch`
 - **HR / Rekrutierung:** `sandra.meier@vektorwerk.ch`
 - **Lernender (Polymechaniker EFZ):** `lukas.frei@vektorwerk.ch`
+
+These demo accounts are for local development only. Do not seed them in production.
 
 ### 2. Manual Backend & Frontend
 
 ```bash
 uv sync
-uv run python -m backend.seed
-uv run python -m backend.app    # API on http://127.0.0.1:5000
+npm run seed
+LEHRJAHRE_ENV=development LEHRJAHRE_DEBUG=1 COOKIE_SECURE=false \
+  uv run python -m backend.app    # API on http://127.0.0.1:5000
 ```
 
 ```bash
@@ -97,10 +100,19 @@ location / {
 }
 ```
 
+**Production checklist**
+- Set `LEHRJAHRE_ENV=production` (the default) and a strong, random `SECRET_KEY` of at least 32 characters. The app refuses to start without a secret outside development.
+- Set `LEHRJAHRE_DEBUG=0` (the default) and run the API with a production WSGI server, not `python -m backend.app`. Debug mode is rejected outside development.
+- Keep `COOKIE_SECURE=true` when the site is served over HTTPS. Set it to `false` only for local HTTP development (`npm run dev` does this automatically).
+- The reverse proxy must strip incoming `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` headers and set them itself. `ProxyFix` trusts one proxy hop.
+- Do not run `backend.seed` in production; demo accounts and the shared demo password are development-only.
+- Keep `data/` and `data/documents/` readable only by the API process user (the app creates them with `0750`/`0640`, but verify after deployment).
+- Collect the API process logs. Security-relevant audit entries are written at `INFO` level.
+
 ## API Endpoints
 
 - `/api/health` (Service status)
-- `/api/auth` (`POST /login`, `POST /logout`, `GET /me`)
+- `/api/auth` (`POST /login`, `POST /logout`, `POST /logout-all`, `GET /me`)
 - `/api/user` (Users & `user_relation` management)
 - `/api/project` (Hierarchical projects, topics, internships & learning goals)
 - `/api/implementation` (Backed by `participation` – student task reports)

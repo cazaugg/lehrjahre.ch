@@ -6,6 +6,7 @@ from flask import session, request, jsonify, g
 from backend.models import db, User, UserRelation
 
 ph = PasswordHasher()
+DUMMY_PASSWORD_HASH = ph.hash("timing-only-dummy-password")
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
@@ -21,6 +22,20 @@ def verify_password(password_hash: str, plain_password: str) -> bool:
         return ph.verify(password_hash, plain_password)
     except (VerifyMismatchError, InvalidHashError):
         return False
+
+
+def password_needs_rehash(password_hash: str) -> bool:
+    if not password_hash:
+        return False
+    try:
+        return ph.check_needs_rehash(password_hash)
+    except (InvalidHashError, ValueError):
+        return False
+
+
+def bump_session_version(user: User) -> None:
+    """Revoke all existing sessions for `user` on the next request."""
+    user.session_version = int(user.session_version or 0) + 1
 
 
 def ensure_csrf_token() -> str:
@@ -52,6 +67,20 @@ def get_current_user() -> User | None:
         g.current_user = None
         return None
     user = db.session.get(User, user_id)
+    if not user:
+        session.clear()
+        g.current_user = None
+        return None
+    try:
+        version_ok = int(session.get("session_version")) == int(
+            user.session_version or 0
+        )
+    except (TypeError, ValueError):
+        version_ok = False
+    if not version_ok:
+        session.clear()
+        g.current_user = None
+        return None
     g.current_user = user
     return user
 

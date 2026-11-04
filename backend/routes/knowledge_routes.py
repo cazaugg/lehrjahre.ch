@@ -2,8 +2,10 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from backend.models import db, Knowledge, Documents
 from backend.auth import login_required, get_current_user
+from backend.audit import audit
 from backend.policies import visible_knowledge_owner_ids
 from backend.storage import save_text_document, read_text_document, delete_stored_file
+from backend.validation import parse_int, parse_str
 
 bp = Blueprint("api_knowledge", __name__, url_prefix="/api/knowledge")
 
@@ -58,23 +60,25 @@ def create_knowledge_node():
     actor = get_current_user()
     data = request.get_json(silent=True) or {}
 
-    title = (data.get("title") or "").strip()
+    title = parse_str(data.get("title"), "Titel")
     if not title:
         return jsonify({"error": "Titel ist erforderlich."}), 400
 
-    parent_id = data.get("parent_id")
+    parent_id = parse_int(
+        data.get("parent_id"), "Übergeordnetes Thema", allow_none=True, min_value=1
+    )
     if parent_id:
-        parent = db.session.get(Knowledge, int(parent_id))
+        parent = db.session.get(Knowledge, parent_id)
         if not parent:
             return jsonify({"error": "Übergeordnetes Thema nicht gefunden."}), 400
         if not can_edit_node(actor, parent):
             return jsonify({"error": "Übergeordnetes Thema gehört nicht Ihnen."}), 403
         parent_id = parent.id
-    else:
-        parent_id = None
 
-    description = (data.get("description") or "").strip()
-    content = data.get("content") or f"# {title}\n\n{description}"
+    description = parse_str(data.get("description"), "Beschreibung")
+    content = parse_str(
+        data.get("content"), "Inhalt", allow_none=True
+    ) or f"# {title}\n\n{description}"
 
     # Every knowledge node stores its page content as a document in /data/documents/<company-slug>/
     clean_filename, rel_path = save_text_document(
@@ -103,6 +107,7 @@ def create_knowledge_node():
     )
     db.session.add(node)
     db.session.commit()
+    audit("knowledge_created", knowledge_id=node.id, owner_id=actor.id)
 
     res = node.to_dict()
     res["content"] = content
@@ -120,14 +125,21 @@ def update_knowledge_node(node_id):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     data = request.get_json(silent=True) or {}
-    if "title" in data and data["title"].strip():
-        node.title = data["title"].strip()
+    if "title" in data:
+        title = parse_str(data.get("title"), "Titel")
+        if title:
+            node.title = title
     if "description" in data:
-        node.description = (data.get("description") or "").strip()
+        node.description = parse_str(data.get("description"), "Beschreibung")
     if "parent_id" in data:
-        pid = data.get("parent_id")
-        if pid and int(pid) != node.id:
-            parent = db.session.get(Knowledge, int(pid))
+        pid = parse_int(
+            data.get("parent_id"),
+            "Übergeordnetes Thema",
+            allow_none=True,
+            min_value=1,
+        )
+        if pid and pid != node.id:
+            parent = db.session.get(Knowledge, pid)
             if not parent:
                 return jsonify({"error": "Übergeordnetes Thema nicht gefunden."}), 400
             if not can_edit_node(actor, parent):
@@ -136,7 +148,7 @@ def update_knowledge_node(node_id):
         else:
             node.parent_id = None
 
-    content = data.get("content")
+    content = parse_str(data.get("content"), "Inhalt", allow_none=True)
     if node.document:
         node.document.name = node.title
         node.document.description = node.description
@@ -169,6 +181,7 @@ def update_knowledge_node(node_id):
         node.document_id = doc.id
 
     db.session.commit()
+    audit("knowledge_updated", knowledge_id=node.id)
     res = node.to_dict()
     res["content"] = (
         content
@@ -202,4 +215,5 @@ def delete_knowledge_node(node_id):
 
     db.session.delete(node)
     db.session.commit()
+    audit("knowledge_deleted", knowledge_id=node_id)
     return jsonify({"data": {"deleted": node_id}})

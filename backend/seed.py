@@ -810,6 +810,10 @@ def build_pdf_preview() -> bytes:
 
 def seed_database():
     app = create_app()
+    if not app.config.get("IS_DEV"):
+        raise RuntimeError(
+            "Seeding demo data is development-only. Set LEHRJAHRE_ENV=development."
+        )
     with app.app_context():
         if User.query.first():
             print("Database already contains users. Skipping seed.")

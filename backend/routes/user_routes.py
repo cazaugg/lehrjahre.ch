@@ -1,5 +1,5 @@
 from datetime import date
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, session
 from backend.models import db, User, UserRelation, Project, Documents
 from backend.auth import (
     login_required,
@@ -7,7 +7,10 @@ from backend.auth import (
     get_current_user,
     hash_password,
     verify_password,
+    bump_session_version,
 )
+from backend.audit import audit
+from backend.storage import delete_stored_file
 from backend.policies import (
     is_supervisor,
     supervised_student_ids,
@@ -15,6 +18,7 @@ from backend.policies import (
     can_edit_student_master_data,
     serialize_user,
 )
+from backend.validation import parse_int, parse_str
 
 bp = Blueprint("api_user", __name__, url_prefix="/api/user")
 
@@ -105,21 +109,30 @@ def create_user():
     company = actor.company_rel
 
     data = request.get_json(silent=True) or {}
-    role = (data.get("role") or "lernender").strip().lower()
+    role = parse_str(data.get("role"), "Rolle", default="lernender").lower()
     if role not in {"lernender", "ausbildner"}:
         return jsonify({"error": "Ungültige Rolle."}), 400
 
-    name = (data.get("name") or "").strip()
-    surname = (data.get("surname") or "").strip()
-    company_email = (data.get("company_email") or "").strip().lower()
-    job_title = (data.get("job_title") or "").strip()
-    password = data.get("password") or "Lehrjahre2026!"
+    name = parse_str(data.get("name"), "Vorname")
+    surname = parse_str(data.get("surname"), "Nachname")
+    company_email = parse_str(data.get("company_email"), "Firmen-E-Mail").lower()
+    job_title = parse_str(data.get("job_title"), "Beruf/Funktion")
+    password = parse_str(
+        data.get("password"), "Passwort", default="", strip=False
+    )
 
     if not name or not surname or not company_email or not job_title:
         return jsonify(
             {
                 "error": "Vorname, Nachname, Firmen-E-Mail und Beruf/Funktion sind Pflichtfelder."
             }
+        ), 400
+
+    if not password:
+        return jsonify({"error": "Passwort ist erforderlich."}), 400
+    if len(password) < 8:
+        return jsonify(
+            {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."}
         ), 400
 
     if not company or not company.matches_email(company_email):
@@ -137,9 +150,13 @@ def create_user():
     if User.query.filter(User.company_email.ilike(company_email)).first():
         return jsonify({"error": "Diese Firmen-E-Mail wird bereits verwendet."}), 400
 
-    company_address = (data.get("company_address") or "").strip()
+    company_address = parse_str(data.get("company_address"), "Firmenadresse")
     if not company_address:
         company_address = (company.address or "").strip()
+
+    supervisor_id = parse_int(
+        data.get("supervisor_id"), "Vorgesetzter", allow_none=True, min_value=1
+    )
 
     new_user = User(
         role=role,
@@ -147,15 +164,15 @@ def create_user():
         surname=surname,
         company_id=actor.company_id,
         password_hash=hash_password(password),
-        private_address=(data.get("private_address") or "").strip(),
-        private_email=(data.get("private_email") or "").strip(),
-        private_phone=(data.get("private_phone") or "").strip(),
-        school_address=(data.get("school_address") or "").strip(),
-        school_email=(data.get("school_email") or "").strip(),
-        school_phone=(data.get("school_phone") or "").strip(),
+        private_address=parse_str(data.get("private_address"), "Private Adresse"),
+        private_email=parse_str(data.get("private_email"), "Private E-Mail"),
+        private_phone=parse_str(data.get("private_phone"), "Private Telefonnummer"),
+        school_address=parse_str(data.get("school_address"), "Schuladresse"),
+        school_email=parse_str(data.get("school_email"), "Schul-E-Mail"),
+        school_phone=parse_str(data.get("school_phone"), "Schul-Telefonnummer"),
         company_address=company_address,
         company_email=company_email,
-        company_phone=(data.get("company_phone") or "").strip(),
+        company_phone=parse_str(data.get("company_phone"), "Firmen-Telefonnummer"),
         start_date=parse_date(data.get("start_date")),
         end_date=parse_date(data.get("end_date")),
         job_title=job_title,
@@ -165,11 +182,11 @@ def create_user():
     )
     db.session.add(new_user)
     db.session.commit()
+    audit("user_created", user_id=new_user.id, role=role, company_id=new_user.company_id)
 
     # Optional initial supervisor relation
-    supervisor_id = data.get("supervisor_id")
     if role == "lernender" and supervisor_id:
-        sup = db.session.get(User, int(supervisor_id))
+        sup = db.session.get(User, supervisor_id)
         if (
             sup
             and sup.company_id == new_user.company_id
@@ -177,6 +194,11 @@ def create_user():
         ):
             db.session.add(UserRelation(supervisor=sup.id, student=new_user.id))
             db.session.commit()
+            audit(
+                "relation_added",
+                supervisor_id=sup.id,
+                student_id=new_user.id,
+            )
             if hasattr(g, "_supervised_student_ids"):
                 delattr(g, "_supervised_student_ids")
 
@@ -210,11 +232,14 @@ def update_user(user_id):
 
     # Check if caller attempts to update master data fields
     # (Ignore company_email if passed unchanged by the disabled form field)
+    incoming_company_email = parse_str(
+        data.get("company_email"), "Firmen-E-Mail", allow_none=True
+    )
     has_master_edits = any(
         field in data
         and not (
             field == "company_email"
-            and (data.get("company_email") or "").strip().lower()
+            and (incoming_company_email or "").lower()
             == (target.company_email or "").lower()
         )
         for field in MASTER_FIELDS
@@ -227,7 +252,7 @@ def update_user(user_id):
     if has_contact_edits:
         for field in CONTACT_FIELDS:
             if field in data:
-                setattr(target, field, (data.get(field) or "").strip())
+                setattr(target, field, parse_str(data.get(field), field))
 
     if "picture_document" in data:
         if actor.id != target.id and not can_edit_user_contacts(actor, target):
@@ -250,16 +275,24 @@ def update_user(user_id):
             target.picture_document = picture.id
 
     if has_master_edits and can_edit_student_master_data(actor, target):
-        if "name" in data and data["name"]:
-            target.name = data["name"].strip()
-        if "surname" in data and data["surname"]:
-            target.surname = data["surname"].strip()
-        if "job_title" in data and data["job_title"]:
-            target.job_title = data["job_title"].strip()
-        if "role" in data and data["role"] in {"lernender", "ausbildner"}:
-            target.role = data["role"]
-        if "company_email" in data and data["company_email"]:
-            new_email = data["company_email"].strip().lower()
+        if "name" in data:
+            name = parse_str(data.get("name"), "Vorname")
+            if name:
+                target.name = name
+        if "surname" in data:
+            surname = parse_str(data.get("surname"), "Nachname")
+            if surname:
+                target.surname = surname
+        if "job_title" in data:
+            job_title = parse_str(data.get("job_title"), "Beruf/Funktion")
+            if job_title:
+                target.job_title = job_title
+        if "role" in data:
+            role = parse_str(data.get("role"), "Rolle")
+            if role in {"lernender", "ausbildner"}:
+                target.role = role
+        if "company_email" in data and incoming_company_email:
+            new_email = incoming_company_email.lower()
             if not target.company_rel.matches_email(new_email):
                 return jsonify(
                     {
@@ -281,21 +314,39 @@ def update_user(user_id):
             target.end_date = parse_date(data.get("end_date"))
 
     # Password update
-    if data.get("new_password"):
-        new_pw = data["new_password"]
+    new_pw = parse_str(
+        data.get("new_password"), "Neues Passwort", default="", strip=False
+    )
+    if new_pw:
         if len(new_pw) < 8:
             return jsonify(
                 {"error": "Das neue Passwort muss mindestens 8 Zeichen lang sein."}
             ), 400
         if actor.id == target.id:
-            current_pw = data.get("current_password") or ""
+            current_pw = parse_str(
+                data.get("current_password"),
+                "Aktuelles Passwort",
+                default="",
+                strip=False,
+            )
             if not verify_password(target.password_hash, current_pw):
                 return jsonify({"error": "Das aktuelle Passwort ist falsch."}), 400
         elif not can_edit_student_master_data(actor, target):
             return jsonify({"error": "Keine Berechtigung."}), 403
         target.password_hash = hash_password(new_pw)
+        bump_session_version(target)
 
     db.session.commit()
+    if new_pw and actor.id == target.id:
+        # Keep the browser that changed its own password logged in; all other
+        # sessions for this user have been invalidated by the version bump.
+        session["session_version"] = int(target.session_version or 0)
+    audit(
+        "user_updated",
+        user_id=target.id,
+        password_changed=bool(new_pw),
+        role=target.role,
+    )
     return jsonify({"data": serialize_user(target, actor)})
 
 
@@ -319,8 +370,24 @@ def delete_user(user_id):
         {Project.author: actor.id}, synchronize_session=False
     )
 
+    # Document rows cascade with the user; collect the files first so they do
+    # not remain on disk after the account is gone.
+    document_paths = [
+        document.path
+        for document in Documents.query.filter_by(owner=target.id).all()
+    ]
+
+    deleted_role = target.role
     db.session.delete(target)
     db.session.commit()
+    for path in document_paths:
+        delete_stored_file(path)
+    audit(
+        "user_deleted",
+        user_id=user_id,
+        role=deleted_role,
+        documents_deleted=len(document_paths),
+    )
     return jsonify({"data": {"deleted": user_id}})
 
 
@@ -329,14 +396,11 @@ def delete_user(user_id):
 def add_relation():
     actor = get_current_user()
     data = request.get_json(silent=True) or {}
-    supervisor_id = data.get("supervisor")
-    student_id = data.get("student")
+    supervisor_id = parse_int(data.get("supervisor"), "Ausbildner", min_value=1)
+    student_id = parse_int(data.get("student"), "Lernende/r", min_value=1)
 
-    if not supervisor_id or not student_id:
-        return jsonify({"error": "Ausbildner und Lernender sind erforderlich."}), 400
-
-    sup = db.session.get(User, int(supervisor_id))
-    stu = db.session.get(User, int(student_id))
+    sup = db.session.get(User, supervisor_id)
+    stu = db.session.get(User, student_id)
     if (
         not sup
         or not stu
@@ -354,6 +418,7 @@ def add_relation():
     rel = UserRelation(supervisor=sup.id, student=stu.id)
     db.session.add(rel)
     db.session.commit()
+    audit("relation_added", supervisor_id=sup.id, student_id=stu.id)
     if hasattr(g, "_supervised_student_ids"):
         delattr(g, "_supervised_student_ids")
     return jsonify({"data": rel.to_dict()}), 201
@@ -371,8 +436,15 @@ def remove_relation(relation_id):
     if not stu or stu.company_id != actor.company_id:
         return jsonify({"error": "Keine Berechtigung."}), 403
 
+    supervisor_id = rel.supervisor
+    student_id = rel.student
     db.session.delete(rel)
     db.session.commit()
+    audit(
+        "relation_removed",
+        supervisor_id=supervisor_id,
+        student_id=student_id,
+    )
     if hasattr(g, "_supervised_student_ids"):
         delattr(g, "_supervised_student_ids")
     return jsonify({"data": {"deleted": relation_id}})

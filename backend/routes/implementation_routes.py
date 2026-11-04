@@ -1,17 +1,34 @@
 from flask import Blueprint, request, jsonify
-from backend.models import db, Participation, Project
+from backend.models import db, Participation, Project, Documents
 from backend.auth import login_required, get_current_user, can_access_student
+from backend.audit import audit
 from backend.policies import (
     is_supervisor,
     is_student,
     supervised_student_ids,
     visible_project_ids_for,
     can_view_project,
+    can_view_document,
     can_participate_in_project,
     serialize_participation,
 )
+from backend.validation import parse_bool, parse_int, parse_str
 
 bp = Blueprint("api_implementation", __name__, url_prefix="/api/implementation")
+
+
+def _validated_participation_document(actor, raw_doc_id):
+    """Return (document, error). Learners may only attach their own documents."""
+    if raw_doc_id in (None, ""):
+        return None, None
+    try:
+        doc_id = int(raw_doc_id)
+    except (TypeError, ValueError):
+        return None, "Ungültiges Dokument."
+    doc = db.session.get(Documents, doc_id)
+    if not doc or doc.owner != actor.id or not can_view_document(actor, doc):
+        return None, "Dokument nicht gefunden."
+    return doc, None
 
 
 @bp.route("", methods=["GET"])
@@ -62,11 +79,9 @@ def create_implementation():
         ), 403
 
     data = request.get_json(silent=True) or {}
-    project_id = data.get("project")
-    if not project_id:
-        return jsonify({"error": "Projekt / Aufgabe ist erforderlich."}), 400
+    project_id = parse_int(data.get("project"), "Projekt / Aufgabe", min_value=1)
 
-    project = db.session.get(Project, int(project_id))
+    project = db.session.get(Project, project_id)
     if (
         not project
         or not can_view_project(actor, project)
@@ -108,14 +123,22 @@ def create_implementation():
             }
         ), 403
 
-    text = (data.get("text") or "").strip() if "text" in data else (part.text if part else "")
-    doc_id = (
-        (int(data["document_id"]) if data.get("document_id") else None)
-        if "document_id" in data
-        else (part.document_id if part else None)
+    text = (
+        parse_str(data.get("text"), "Bericht")
+        if "text" in data
+        else (part.text if part else "")
     )
-    is_done = bool(data.get("is_done", False))
-    title = (data.get("title") or "").strip() or project.title
+    if "document_id" in data:
+        doc, document_error = _validated_participation_document(
+            actor, data.get("document_id")
+        )
+        if document_error:
+            return jsonify({"error": document_error}), 400
+        doc_id = doc.id if doc else None
+    else:
+        doc_id = part.document_id if part else None
+    is_done = parse_bool(data.get("is_done"), "Abgabe")
+    title = parse_str(data.get("title"), "Titel") or project.title
 
     if is_done and not text and not doc_id:
         return jsonify(
@@ -130,7 +153,14 @@ def create_implementation():
         part.document_id = doc_id
         part.is_done = is_done
         db.session.commit()
-        return jsonify({"data": part.to_dict()}), 200
+        audit(
+            "implementation_saved",
+            participation_id=part.id,
+            project_id=part.project,
+            student_id=part.student,
+            done=bool(part.is_done),
+        )
+        return jsonify({"data": serialize_participation(part, actor)}), 200
 
     part = Participation(
         supervisor=root_project.author or project.author,
@@ -143,6 +173,13 @@ def create_implementation():
     )
     db.session.add(part)
     db.session.commit()
+    audit(
+        "implementation_created",
+        participation_id=part.id,
+        project_id=part.project,
+        student_id=part.student,
+        done=bool(part.is_done),
+    )
     return jsonify({"data": serialize_participation(part, actor)}), 201
 
 
@@ -180,16 +217,21 @@ def update_implementation(part_id):
                 }
             ), 403
 
-        if "title" in data and (data.get("title") or "").strip():
-            part.title = data["title"].strip()
+        if "title" in data:
+            title = parse_str(data.get("title"), "Titel")
+            if title:
+                part.title = title
         if "text" in data:
-            part.text = (data.get("text") or "").strip()
+            part.text = parse_str(data.get("text"), "Bericht")
         if "document_id" in data:
-            part.document_id = (
-                int(data["document_id"]) if data.get("document_id") else None
+            doc, document_error = _validated_participation_document(
+                actor, data.get("document_id")
             )
+            if document_error:
+                return jsonify({"error": document_error}), 400
+            part.document_id = doc.id if doc else None
         if "is_done" in data:
-            new_done = bool(data.get("is_done"))
+            new_done = parse_bool(data.get("is_done"), "Abgabe")
             if new_done and not part.text and not part.document_id:
                 return jsonify(
                     {
@@ -201,13 +243,17 @@ def update_implementation(part_id):
         # Supervisors can only view the report content, but can change submission status (is_done)
         has_title_change = (
             "title" in data
-            and (data.get("title") or "").strip() != (part.title or "")
+            and parse_str(data.get("title"), "Titel") != (part.title or "")
         )
         has_text_change = (
-            "text" in data and (data.get("text") or "").strip() != (part.text or "")
+            "text" in data
+            and parse_str(data.get("text"), "Bericht") != (part.text or "")
         )
-        new_doc_id = (
-            int(data["document_id"]) if data.get("document_id") else None
+        new_doc_id = parse_int(
+            data.get("document_id"),
+            "Dokument",
+            allow_none=True,
+            min_value=1,
         )
         has_doc_change = "document_id" in data and new_doc_id != part.document_id
         if has_title_change or has_text_change or has_doc_change:
@@ -217,7 +263,7 @@ def update_implementation(part_id):
                 }
             ), 403
         if "is_done" in data:
-            part.is_done = bool(data.get("is_done"))
+            part.is_done = parse_bool(data.get("is_done"), "Abgabe")
         # The recorded supervisor is never taken from client input.
         if (
             not part.supervisor
@@ -229,6 +275,13 @@ def update_implementation(part_id):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     db.session.commit()
+    audit(
+        "implementation_updated",
+        participation_id=part.id,
+        project_id=part.project,
+        student_id=part.student,
+        done=bool(part.is_done),
+    )
     return jsonify({"data": serialize_participation(part, actor)})
 
 
@@ -247,6 +300,12 @@ def delete_implementation(part_id):
             {"error": "Abgegebene Arbeitsberichte können nicht gelöscht werden."}
         ), 403
 
+    project_id = part.project
     db.session.delete(part)
     db.session.commit()
+    audit(
+        "implementation_deleted",
+        participation_id=part_id,
+        project_id=project_id,
+    )
     return jsonify({"data": {"deleted": part_id}})

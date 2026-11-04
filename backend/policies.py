@@ -281,6 +281,7 @@ def serialize_project(
     manageable_ids: set[int] | None = None,
 ) -> dict:
     data = project.to_dict()
+    data["document"] = serialize_document_for(project.document, actor)
     if manageable_ids is None:
         data["can_manage"] = can_manage_project(actor, project)
     else:
@@ -312,11 +313,17 @@ def can_participate_in_project(actor: User | None, project: Project | None) -> b
     )
 
 
-def serialize_eval(evaluation: Eval, actor: User | None) -> dict:
+def serialize_eval(
+    evaluation: Eval, actor: User | None, project_completed: bool = False
+) -> dict:
     """Mask eval_text for students until eval_released is True."""
     data = evaluation.to_dict()
-    if is_student(actor) and not (evaluation.eval_released or evaluation.is_released):
+    if is_student(actor) and not (
+        evaluation.eval_released or evaluation.is_released or project_completed
+    ):
         data["eval_text"] = ""
+        data["score_type"] = None
+        data["score_value"] = None
     # Never expose a supervisor from another company, even for legacy rows.
     if (
         evaluation.supervisor_user
@@ -331,6 +338,7 @@ def serialize_eval(evaluation: Eval, actor: User | None) -> dict:
 def serialize_participation(participation: Participation, actor: User | None) -> dict:
     """Serialize a Participation without leaking foreign-company supervisors."""
     data = participation.to_dict()
+    data["document"] = serialize_document_for(participation.document, actor)
     if (
         participation.supervisor_user
         and actor
@@ -359,6 +367,22 @@ def visible_knowledge_owner_ids(actor: User | None) -> set[int]:
     return set()
 
 
+def _project_document_visible(actor: User | None, doc: Documents) -> bool:
+    """Return True when a project document is attached to a visible project."""
+    if not actor:
+        return False
+    visible_ids = visible_project_ids_for(actor)
+    if not visible_ids:
+        return False
+    return (
+        Project.query.filter(
+            Project.document_id == doc.id,
+            Project.id.in_(visible_ids),
+        ).first()
+        is not None
+    )
+
+
 def can_view_document(actor: User | None, doc: Documents | None) -> bool:
     if not actor or not doc:
         return False
@@ -366,20 +390,15 @@ def can_view_document(actor: User | None, doc: Documents | None) -> bool:
     if not owner or owner.company_id != actor.company_id:
         return False
 
+    # Everyone may see their own documents and documents they authored.
+    if doc.owner == actor.id or doc.author == actor.id:
+        return True
+
     # Profile pictures belong to company contact data -> visible within company
     if doc.type == "profilbild":
         return True
 
-    # Trainer-owned project documents are part of the project assignment and
-    # must be readable by the assigned students.
-    owner_user = db.session.get(User, doc.owner)
-    if doc.type == "projekt" and owner_user and owner_user.role == "ausbildner":
-        return True
-
-    if doc.author == actor.id:
-        return True
-
-    # Templates in the same company
+    # Templates are deliberately company-wide.
     if doc.is_template:
         return True
 
@@ -387,13 +406,26 @@ def can_view_document(actor: User | None, doc: Documents | None) -> bool:
     if doc.type == "wissen":
         return doc.owner in visible_knowledge_owner_ids(actor)
 
+    if doc.type == "projekt":
+        # Supervisors may see their learners' submitted project documents.
+        if is_supervisor_of(actor, doc.owner):
+            return True
+        # Trainer-owned project documents are readable by users who can see the
+        # project they are attached to (not by the whole company).
+        return _project_document_visible(actor, doc)
+
     # All other documents (zeugnis, kursnachweis, ausbildungsgespraech,
     # lernjournal, vertrag, bewerbung, sonstiges):
     # - Student: own documents (doc.owner == actor.id)
     # - Supervisor: own documents or subordinate students' documents
-    if doc.owner == actor.id:
-        return True
     return is_supervisor_of(actor, doc.owner)
+
+
+def serialize_document_for(doc: Documents | None, actor: User | None) -> dict | None:
+    """Return document metadata only when the actor may view the document."""
+    if not doc or not can_view_document(actor, doc):
+        return None
+    return doc.to_dict()
 
 
 def can_create_document(
@@ -409,6 +441,9 @@ def can_create_document(
         return is_supervisor(actor)
 
     if doc_type == "profilbild":
+        return actor.id == owner_id or is_supervisor_of(actor, owner_id)
+
+    if doc_type == "projekt":
         return actor.id == owner_id or is_supervisor_of(actor, owner_id)
 
     if doc_type == "wissen":

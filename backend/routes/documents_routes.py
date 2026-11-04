@@ -19,6 +19,8 @@ from backend.storage import (
     resolve_safe_path,
     delete_stored_file,
 )
+from backend.audit import audit
+from backend.validation import parse_bool, parse_int, parse_str
 
 bp = Blueprint("api_documents", __name__, url_prefix="/api/documents")
 
@@ -110,11 +112,14 @@ def download_document(doc_id):
         return jsonify({"error": "Datei auf dem Server nicht gefunden."}), 404
 
     as_attachment = request.args.get("download") == "1"
-    return send_file(
+    response = send_file(
         abs_path,
         as_attachment=as_attachment,
         download_name=doc.filename,
     )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @bp.route("", methods=["POST"])
@@ -126,25 +131,29 @@ def create_document():
     if request.content_type and "multipart/form-data" in request.content_type:
         form = request.form
         uploaded_file = request.files.get("file")
-        name = (form.get("name") or "").strip()
-        description = (form.get("description") or "").strip()
-        doc_type = (form.get("type") or "sonstiges").strip().lower()
+        name = parse_str(form.get("name"), "Dokumentname")
+        description = parse_str(form.get("description"), "Beschreibung")
+        doc_type = parse_str(form.get("type"), "Dokumenttyp", default="sonstiges").lower()
         owner_id = form.get("owner", type=int) or actor.id
         is_template = form.get("is_template", "false").lower() == "true"
         is_done = form.get("is_done", "false").lower() == "true"
-        text_content = form.get("content")
-        feedback = (form.get("feedback") or "").strip()
+        text_content = parse_str(form.get("content"), "Inhalt", allow_none=True)
+        feedback = parse_str(form.get("feedback"), "Rückmeldung")
     else:
         data = request.get_json(silent=True) or {}
         uploaded_file = None
-        name = (data.get("name") or "").strip()
-        description = (data.get("description") or "").strip()
-        doc_type = (data.get("type") or "sonstiges").strip().lower()
-        owner_id = int(data.get("owner") or actor.id)
-        is_template = bool(data.get("is_template", False))
-        is_done = bool(data.get("is_done", False))
-        text_content = data.get("content")
-        feedback = (data.get("feedback") or "").strip()
+        name = parse_str(data.get("name"), "Dokumentname")
+        description = parse_str(data.get("description"), "Beschreibung")
+        doc_type = parse_str(data.get("type"), "Dokumenttyp", default="sonstiges").lower()
+        owner_id = (
+            parse_int(data.get("owner"), "Eigentümer", min_value=1)
+            if data.get("owner") not in (None, "")
+            else actor.id
+        )
+        is_template = parse_bool(data.get("is_template"), "Vorlage")
+        is_done = parse_bool(data.get("is_done"), "Abgeschlossen")
+        text_content = parse_str(data.get("content"), "Inhalt", allow_none=True)
+        feedback = parse_str(data.get("feedback"), "Rückmeldung")
 
     if doc_type not in VALID_TYPES:
         doc_type = "sonstiges"
@@ -199,6 +208,13 @@ def create_document():
     )
     db.session.add(doc)
     db.session.commit()
+    audit(
+        "document_created",
+        document_id=doc.id,
+        owner_id=doc.owner,
+        document_type=doc.type,
+        is_template=bool(doc.is_template),
+    )
 
     res = doc.to_dict()
     if text_content is not None:
@@ -216,6 +232,14 @@ def update_document(doc_id):
 
     data = request.get_json(silent=True) or {}
 
+    # Never let a supervisor turn someone else's private document into a
+    # company-wide template. Templates must be created as templates.
+    new_template = parse_bool(data.get("is_template"), "Vorlage")
+    if new_template and not doc.is_template and doc.owner != actor.id:
+        return jsonify(
+            {"error": "Vorlagen können nur aus eigenen Dokumenten erstellt werden."}
+        ), 403
+
     if doc.is_template:
         if not is_supervisor(actor):
             return jsonify({"error": "Keine Berechtigung."}), 403
@@ -223,9 +247,9 @@ def update_document(doc_id):
         if is_student(actor):
             if doc.owner != actor.id:
                 return jsonify({"error": "Keine Berechtigung."}), 403
-            if "feedback" in data and (data.get("feedback") or "").strip() != (
-                doc.feedback or ""
-            ):
+            if "feedback" in data and parse_str(
+                data.get("feedback"), "Rückmeldung"
+            ) != (doc.feedback or ""):
                 return jsonify(
                     {
                         "error": "Lernjournal-Rückmeldungen können nur von Vorgesetzten bearbeitet werden."
@@ -236,18 +260,26 @@ def update_document(doc_id):
                 return jsonify({"error": "Keine Berechtigung."}), 403
             current_content = read_text_document(doc.path)
             has_entry_changes = (
-                ("name" in data and data["name"].strip() != doc.name)
+                (
+                    "name" in data
+                    and parse_str(data.get("name"), "Dokumentname") != doc.name
+                )
                 or (
                     "description" in data
-                    and (data.get("description") or "").strip()
+                    and parse_str(data.get("description"), "Beschreibung")
                     != (doc.description or "")
                 )
                 or (
                     "content" in data
-                    and data["content"] is not None
-                    and data["content"] != current_content
+                    and data.get("content") is not None
+                    and parse_str(data.get("content"), "Inhalt", allow_none=True)
+                    != current_content
                 )
-                or ("is_done" in data and bool(data.get("is_done")) != bool(doc.is_done))
+                or (
+                    "is_done" in data
+                    and parse_bool(data.get("is_done"), "Abgeschlossen")
+                    != bool(doc.is_done)
+                )
             )
             if has_entry_changes or "feedback" not in data:
                 return jsonify(
@@ -255,9 +287,14 @@ def update_document(doc_id):
                         "error": "Der Lernjournal-Eintrag selbst kann nur vom Lernenden bearbeitet werden."
                     }
                 ), 403
-            doc.feedback = (data.get("feedback") or "").strip()
+            doc.feedback = parse_str(data.get("feedback"), "Rückmeldung")
             doc.updated_date = datetime.now(timezone.utc)
             db.session.commit()
+            audit(
+                "document_feedback_updated",
+                document_id=doc.id,
+                owner_id=doc.owner,
+            )
             res = doc.to_dict()
             res["content"] = current_content
             return jsonify({"data": res})
@@ -284,21 +321,24 @@ def update_document(doc_id):
         ):
             return jsonify({"error": "Keine Berechtigung."}), 403
 
-    if "name" in data and data["name"].strip():
-        doc.name = data["name"].strip()
+    if "name" in data:
+        name = parse_str(data.get("name"), "Dokumentname")
+        if name:
+            doc.name = name
     if "description" in data:
-        doc.description = (data.get("description") or "").strip()
+        doc.description = parse_str(data.get("description"), "Beschreibung")
     if "is_done" in data:
-        doc.is_done = bool(data.get("is_done"))
+        doc.is_done = parse_bool(data.get("is_done"), "Abgeschlossen")
     if is_supervisor(actor) and "is_template" in data:
-        doc.is_template = bool(data.get("is_template"))
+        doc.is_template = new_template
     if is_supervisor(actor) and "feedback" in data:
-        doc.feedback = (data.get("feedback") or "").strip()
+        doc.feedback = parse_str(data.get("feedback"), "Rückmeldung")
 
-    if "content" in data and data["content"] is not None:
+    if "content" in data and data.get("content") is not None:
+        content = parse_str(data.get("content"), "Inhalt", allow_none=True)
         owner_user = db.session.get(User, doc.owner) or actor
         _, rel_path = save_text_document(
-            data["content"],
+            content,
             doc.name,
             owner_user.company_rel.name,
             existing_rel_path=doc.path,
@@ -307,6 +347,12 @@ def update_document(doc_id):
 
     doc.updated_date = datetime.now(timezone.utc)
     db.session.commit()
+    audit(
+        "document_updated",
+        document_id=doc.id,
+        owner_id=doc.owner,
+        document_type=doc.type,
+    )
 
     res = doc.to_dict()
     res["content"] = read_text_document(doc.path)
@@ -325,8 +371,16 @@ def delete_document(doc_id):
         return jsonify({"error": "Keine Berechtigung zum Löschen."}), 403
 
     rel_path = doc.path
+    owner_id = doc.owner
+    document_type = doc.type
     db.session.delete(doc)
     db.session.commit()
     delete_stored_file(rel_path)
+    audit(
+        "document_deleted",
+        document_id=doc_id,
+        owner_id=owner_id,
+        document_type=document_type,
+    )
 
     return jsonify({"data": {"deleted": doc_id}})

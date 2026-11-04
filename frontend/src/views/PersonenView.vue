@@ -48,7 +48,7 @@ const newCompanyPhone = ref('')
 const newJobTitle = ref('')
 const newStartDate = ref('')
 const newEndDate = ref('')
-const newPassword = ref('Lehrjahre2026!')
+const newPassword = ref('')
 const newSupervisorId = ref('')
 
 // Per-student supervisor select map
@@ -114,7 +114,7 @@ function openCreateUser(role = 'lernender') {
       : auth.trainerFunctions[1] || 'Berufsbildner'
   newStartDate.value = role === 'lernender' ? '2026-08-10' : ''
   newEndDate.value = role === 'lernender' ? '2030-07-31' : ''
-  newPassword.value = 'Lehrjahre2026!'
+  newPassword.value = ''
   newSupervisorId.value = supervisors.value[0]?.id || ''
   showUserModal.value = true
 }
@@ -759,7 +759,14 @@ function formatDate(d) {
 
         <div class="form-group">
           <label class="form-label">Initialpasswort *</label>
-          <input v-model="newPassword" type="text" class="form-control" required />
+          <input
+            v-model="newPassword"
+            type="password"
+            class="form-control"
+            minlength="8"
+            autocomplete="new-password"
+            required
+          />
         </div>
 
         <div class="flex-between">

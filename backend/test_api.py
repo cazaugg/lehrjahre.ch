@@ -11,6 +11,7 @@ from backend.models import (
     Project,
     Eval,
     Participation,
+    Documents,
 )
 from backend.auth import hash_password
 from backend.storage import resolve_safe_path
@@ -28,6 +29,9 @@ def client():
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_file}",
             "DOCUMENTS_ROOT": docs_dir,
             "SECRET_KEY": "test-secret",
+            "SESSION_COOKIE_SECURE": False,
+            "IS_DEV": True,
+            "DEBUG": False,
         }
     )
 
@@ -340,6 +344,8 @@ def test_projects_access_and_workflow(client):
             "goal": "Ziel A",
             "planning_text": "Toleranz 0.02mm beachten",
             "eval_text": "Geheimer Entwurf der Bewertung",
+            "score_type": "grade",
+            "score_value": 5.5,
             "eval_released": False,
         },
         headers={"X-CSRF-Token": csrf_t1},
@@ -386,6 +392,8 @@ def test_projects_access_and_workflow(client):
     assert len(s1_evals) == 1
     assert s1_evals[0]["planning_text"] == "Toleranz 0.02mm beachten"
     assert s1_evals[0]["eval_text"] == ""
+    assert s1_evals[0]["score_type"] is None
+    assert s1_evals[0]["score_value"] is None
     assert s1_evals[0]["eval_released"] is False
 
     # Student 1 creates an implementation report (not done yet)
@@ -475,6 +483,8 @@ def test_projects_access_and_workflow(client):
     login(client, "student@vektorwerk.ch")
     s1_evals_after = client.get("/api/evaluation").get_json()["data"]
     assert s1_evals_after[0]["eval_text"] == "Geheimer Entwurf der Bewertung"
+    assert s1_evals_after[0]["score_type"] == "grade"
+    assert s1_evals_after[0]["score_value"] == 5.5
     assert s1_evals_after[0]["eval_released"] is True
 
 
@@ -785,6 +795,7 @@ def test_company_membership_and_email_domain(client):
             "company_email": email,
             "job_title": "Polymechanikerin / Polymechaniker EFZ",
             "supervisor_id": trainer["id"],
+            "password": "Passwort123!",
             **extra,
         }
         return client.post(
@@ -2187,3 +2198,565 @@ def test_unauthenticated_api_access_is_rejected(client):
         ).status_code
         == 401
     )
+
+
+def test_project_evaluation_save_requires_manage_and_company(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    res = client.post(
+        "/api/project",
+        json={
+            "title": "Eval-Projekt",
+            "description": "Beschreibung",
+            "planning_released": True,
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    project_id = res.get_json()["data"]["id"]
+
+    # A supervisor who neither owns nor manages the project cannot save it.
+    csrf_t2, _ = login(client, "trainer2@vektorwerk.ch")
+    assert (
+        client.post(
+            f"/api/evaluation/project/{project_id}",
+            json={"global_eval_text": "Übernommen", "is_completed": True},
+            headers={"X-CSRF-Token": csrf_t2},
+        ).status_code
+        == 403
+    )
+
+    # A supervisor from another company cannot mutate the project.
+    csrf_ft, _ = login(client, "nina@fremd.ch")
+    res = client.post(
+        "/api/project",
+        json={
+            "title": "Fremdprojekt",
+            "description": "Fremd",
+            "planning_released": True,
+        },
+        headers={"X-CSRF-Token": csrf_ft},
+    )
+    assert res.status_code == 201
+    foreign_project_id = res.get_json()["data"]["id"]
+
+    assert (
+        client.post(
+            f"/api/evaluation/project/{project_id}",
+            json={"global_eval_text": "Übernommen", "is_completed": True},
+            headers={"X-CSRF-Token": csrf_ft},
+        ).status_code
+        == 403
+    )
+
+    # And the local supervisor cannot mutate the foreign project.
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    assert (
+        client.post(
+            f"/api/evaluation/project/{foreign_project_id}",
+            json={"global_eval_text": "Übernommen", "is_completed": True},
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 403
+    )
+
+    # The manager can still save.
+    res = client.post(
+        f"/api/evaluation/project/{project_id}",
+        json={"global_eval_text": "Gutes Ergebnis", "is_completed": False},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 200
+
+
+def test_project_detail_filters_other_learners(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user?role=lernender").get_json()["data"]["users"]
+    }
+    student1_id = users["student@vektorwerk.ch"]["id"]
+    student2_id = users["student2@vektorwerk.ch"]["id"]
+
+    res = client.post(
+        "/api/project",
+        json={
+            "title": "Geteiltes Projekt",
+            "description": "Gemeinsame Aufgabe",
+            "assigned_students": [student1_id, student2_id],
+            "planning_released": True,
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    project_id = res.get_json()["data"]["id"]
+
+    csrf_s1, _ = login(client, "student@vektorwerk.ch")
+    res = client.post(
+        "/api/implementation",
+        json={"project": project_id, "text": "S1 Bericht"},
+        headers={"X-CSRF-Token": csrf_s1},
+    )
+    assert res.status_code == 201
+
+    csrf_s2, _ = login(client, "student2@vektorwerk.ch")
+    res = client.post(
+        "/api/implementation",
+        json={"project": project_id, "text": "S2 Bericht"},
+        headers={"X-CSRF-Token": csrf_s2},
+    )
+    assert res.status_code == 201
+
+    with client.application.app_context():
+        db.session.add(
+            Eval(
+                project=project_id,
+                target_type="goal",
+                goal="S2 Ziel",
+                student=student2_id,
+                planning_text="S2 Planung",
+                eval_text="S2 Bewertung",
+                is_released=True,
+                eval_released=True,
+            )
+        )
+        db.session.commit()
+
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    detail = client.get(f"/api/project/{project_id}").get_json()["data"]
+    assert [p["text"] for p in detail["participations"]] == ["S1 Bericht"]
+    assert detail["evaluations"] == []
+
+    raw = client.get(f"/api/project/{project_id}").get_data(as_text=True)
+    assert "S2 Bericht" not in raw
+    assert "S2 Bewertung" not in raw
+    assert "S2 Planung" not in raw
+
+
+def test_project_document_visibility_follows_project_access(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user?role=lernender").get_json()["data"]["users"]
+    }
+    student1_id = users["student@vektorwerk.ch"]["id"]
+
+    res = client.post(
+        "/api/documents",
+        json={
+            "name": "Projektanleitung",
+            "type": "projekt",
+            "content": "Nur für Team A",
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    doc_id = res.get_json()["data"]["id"]
+
+    res = client.post(
+        "/api/project",
+        json={
+            "title": "Team-A-Projekt",
+            "description": "Team A",
+            "document_id": doc_id,
+            "assigned_students": [student1_id],
+            "planning_released": True,
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+
+    # Owner and assigned learner can read it.
+    assert client.get(f"/api/documents/{doc_id}").status_code == 200
+    csrf_s1, _ = login(client, "student@vektorwerk.ch")
+    assert client.get(f"/api/documents/{doc_id}").status_code == 200
+
+    # An unassigned learner must not see it in the list or directly.
+    csrf_s2, _ = login(client, "student2@vektorwerk.ch")
+    assert client.get(f"/api/documents/{doc_id}").status_code == 404
+    listed = client.get("/api/documents?type=projekt&include_content=true").get_json()[
+        "data"
+    ]
+    assert doc_id not in {d["id"] for d in listed}
+
+    # An unrelated supervisor cannot see it either.
+    csrf_t2, _ = login(client, "trainer2@vektorwerk.ch")
+    assert client.get(f"/api/documents/{doc_id}").status_code == 404
+
+
+def test_template_conversion_requires_document_ownership(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    student1_id = {
+        u["company_email"]: u
+        for u in client.get("/api/user?role=lernender").get_json()["data"]["users"]
+    }["student@vektorwerk.ch"]["id"]
+
+    # A supervisor may not turn a learner's private document into a template.
+    res = client.post(
+        "/api/documents",
+        json={
+            "name": "Zeugnis Lukas",
+            "type": "zeugnis",
+            "owner": student1_id,
+            "content": "Privat",
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    learner_doc_id = res.get_json()["data"]["id"]
+
+    assert (
+        client.put(
+            f"/api/documents/{learner_doc_id}",
+            json={"is_template": True},
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 403
+    )
+
+    # It stays private.
+    csrf_s2, _ = login(client, "student2@vektorwerk.ch")
+    assert client.get(f"/api/documents/{learner_doc_id}").status_code == 404
+
+    # Converting one's own document is still allowed.
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    res = client.post(
+        "/api/documents",
+        json={"name": "Eigenes Zeugnis", "type": "zeugnis", "content": "Eigen"},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    own_doc_id = res.get_json()["data"]["id"]
+    res = client.put(
+        f"/api/documents/{own_doc_id}",
+        json={"is_template": True},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 200
+    assert res.get_json()["data"]["is_template"] is True
+
+    # The string "false" must not be coerced to a truthy template flag.
+    res = client.post(
+        "/api/documents",
+        json={
+            "name": "Keine Vorlage",
+            "type": "sonstiges",
+            "content": "Inhalt",
+            "is_template": "false",
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    assert res.get_json()["data"]["is_template"] is False
+
+
+def test_document_references_are_validated(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user?role=lernender").get_json()["data"]["users"]
+    }
+    student1_id = users["student@vektorwerk.ch"]["id"]
+    student2_id = users["student2@vektorwerk.ch"]["id"]
+
+    res = client.post(
+        "/api/project",
+        json={
+            "title": "Abgabe-Projekt",
+            "description": "Beschreibung",
+            "assigned_students": [student1_id],
+            "planning_released": True,
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    project_id = res.get_json()["data"]["id"]
+
+    # A document owned by another learner.
+    csrf_s2, _ = login(client, "student2@vektorwerk.ch")
+    res = client.post(
+        "/api/documents",
+        json={"name": "Zeugnis Elena", "type": "zeugnis", "content": "Geheim"},
+        headers={"X-CSRF-Token": csrf_s2},
+    )
+    assert res.status_code == 201
+    other_learner_doc_id = res.get_json()["data"]["id"]
+
+    # A document from another company.
+    csrf_fs, _ = login(client, "ali@fremd.ch")
+    res = client.post(
+        "/api/documents",
+        json={"name": "Fremdzeugnis", "type": "zeugnis", "content": "Fremd"},
+        headers={"X-CSRF-Token": csrf_fs},
+    )
+    assert res.status_code == 201
+    foreign_doc_id = res.get_json()["data"]["id"]
+
+    csrf_s1, _ = login(client, "student@vektorwerk.ch")
+    for bad_doc_id in (other_learner_doc_id, foreign_doc_id):
+        assert (
+            client.post(
+                "/api/implementation",
+                json={
+                    "project": project_id,
+                    "text": "Bericht",
+                    "document_id": bad_doc_id,
+                },
+                headers={"X-CSRF-Token": csrf_s1},
+            ).status_code
+            == 400
+        )
+
+    # The learner's own document is accepted.
+    res = client.post(
+        "/api/documents",
+        json={"name": "Eigener Bericht", "type": "projekt", "content": "Inhalt"},
+        headers={"X-CSRF-Token": csrf_s1},
+    )
+    assert res.status_code == 201
+    own_doc_id = res.get_json()["data"]["id"]
+    res = client.post(
+        "/api/implementation",
+        json={
+            "project": project_id,
+            "text": "Bericht",
+            "document_id": own_doc_id,
+        },
+        headers={"X-CSRF-Token": csrf_s1},
+    )
+    assert res.status_code == 201
+
+    # Project and task attachments cannot reference another user's document.
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    assert (
+        client.post(
+            "/api/project",
+            json={
+                "title": "Ungültige Anlage",
+                "description": "Beschreibung",
+                "document_id": other_learner_doc_id,
+            },
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/project",
+            json={
+                "title": "Ungültige Aufgabe",
+                "description": "Beschreibung",
+                "tasks": [
+                    {"title": "Aufgabe", "document_id": other_learner_doc_id}
+                ],
+            },
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 400
+    )
+
+    # Legacy rows pointing at an unauthorized document must not leak metadata.
+    with client.application.app_context():
+        part = Participation.query.filter_by(
+            student=student1_id, project=project_id
+        ).one()
+        part.document_id = other_learner_doc_id
+        db.session.commit()
+
+    detail = client.get(f"/api/project/{project_id}").get_json()["data"]
+    assert detail["participations"][0]["document"] is None
+
+
+def test_password_change_invalidates_other_sessions(client):
+    csrf, student = login(client, "student@vektorwerk.ch")
+    old_cookie = client.get_cookie("session").value
+
+    res = client.put(
+        f"/api/user/{student['id']}",
+        json={
+            "current_password": "Passwort123!",
+            "new_password": "NeuesPasswort123!",
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert res.status_code == 200
+
+    # The session that changed its own password stays logged in.
+    assert client.get("/api/user").status_code == 200
+
+    # Replay the pre-change cookie: the version bump must revoke it.
+    client.set_cookie("session", old_cookie)
+    assert client.get("/api/user").status_code == 401
+
+
+def test_logout_all_revokes_all_sessions(client):
+    csrf, _ = login(client, "student@vektorwerk.ch")
+    old_cookie = client.get_cookie("session").value
+
+    res = client.post(
+        "/api/auth/logout-all",
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert res.status_code == 200
+    assert client.get("/api/user").status_code == 401
+
+    # A stolen cookie from before logout-all must also be rejected.
+    client.set_cookie("session", old_cookie)
+    assert client.get("/api/user").status_code == 401
+
+
+def test_invalid_payloads_return_400(client):
+    csrf, _ = login(client, "trainer@vektorwerk.ch")
+
+    assert (
+        client.post(
+            "/api/project",
+            json={"title": "Ungültiges Elternprojekt", "parent_project": "abc"},
+            headers={"X-CSRF-Token": csrf},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/user/relation",
+            json={"supervisor": "abc", "student": 1},
+            headers={"X-CSRF-Token": csrf},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/project",
+            json={"title": "Ungültige Freigabe", "is_published": "maybe"},
+            headers={"X-CSRF-Token": csrf},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/project",
+            json={"title": 123},
+            headers={"X-CSRF-Token": csrf},
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/project",
+            json=["not", "an", "object"],
+            headers={"X-CSRF-Token": csrf},
+        ).status_code
+        == 400
+    )
+
+
+def test_document_download_has_hardening_headers(client):
+    csrf, _ = login(client, "trainer@vektorwerk.ch")
+    res = client.post(
+        "/api/documents",
+        json={"name": "Header-Test", "type": "sonstiges", "content": "Inhalt"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert res.status_code == 201
+    doc_id = res.get_json()["data"]["id"]
+
+    res = client.get(f"/api/documents/{doc_id}/file")
+    assert res.status_code == 200
+    assert res.headers["X-Content-Type-Options"] == "nosniff"
+    assert res.headers["Cache-Control"] == "private, no-store"
+
+
+def test_login_rejects_wildcards_and_requires_exact_email(client):
+    for wildcard in ("%", "_", "%@vektorwerk.ch"):
+        res = client.post(
+            "/api/auth/login",
+            json={"email": wildcard, "password": "Passwort123!"},
+        )
+        assert res.status_code in {400, 401}
+
+    # Exact matching still works.
+    csrf, user = login(client, "trainer@vektorwerk.ch")
+    assert user["role"] == "ausbildner"
+    assert csrf
+
+
+def test_login_rate_limit(client):
+    email = "does-not-exist@vektorwerk.ch"
+    environ = {"REMOTE_ADDR": "203.0.113.77"}
+    for _ in range(10):
+        res = client.post(
+            "/api/auth/login",
+            json={"email": email, "password": "wrong-password"},
+            environ_base=environ,
+        )
+        assert res.status_code == 401
+
+    res = client.post(
+        "/api/auth/login",
+        json={"email": email, "password": "wrong-password"},
+        environ_base=environ,
+    )
+    assert res.status_code == 429
+    assert "Retry-After" in res.headers
+
+
+def test_create_user_requires_password(client):
+    csrf, _ = login(client, "trainer@vektorwerk.ch")
+    res = client.post(
+        "/api/user",
+        json={
+            "role": "lernender",
+            "name": "Max",
+            "surname": "Muster",
+            "company_email": "max.muster@vektorwerk.ch",
+            "job_title": "Polymechanikerin / Polymechaniker EFZ",
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert res.status_code == 400
+    assert "Passwort" in res.get_json()["error"]
+
+
+def test_production_security_config_is_enforced(tmp_path):
+    base = {
+        "IS_DEV": False,
+        "DEBUG": False,
+        "SECRET_KEY": None,
+        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'test.db'}",
+        "DOCUMENTS_ROOT": str(tmp_path / "documents"),
+    }
+    with pytest.raises(RuntimeError):
+        create_app(base)
+
+    base["SECRET_KEY"] = "x" * 40
+    base["DEBUG"] = True
+    with pytest.raises(RuntimeError):
+        create_app(base)
+
+    base["DEBUG"] = False
+    base["SECRET_KEY"] = "short"
+    with pytest.raises(RuntimeError):
+        create_app(base)
+
+
+def test_deleting_user_removes_document_files(client):
+    csrf_s1, student1 = login(client, "student@vektorwerk.ch")
+    res = client.post(
+        "/api/documents",
+        json={"name": "Zeugnis", "type": "zeugnis", "content": "Inhalt"},
+        headers={"X-CSRF-Token": csrf_s1},
+    )
+    assert res.status_code == 201
+    doc_id = res.get_json()["data"]["id"]
+
+    with client.application.app_context():
+        rel_path = db.session.get(Documents, doc_id).path
+        abs_path = resolve_safe_path(rel_path)
+    assert os.path.isfile(abs_path)
+
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    res = client.delete(
+        f"/api/user/{student1['id']}",
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 200
+    assert not os.path.isfile(abs_path)

@@ -2,7 +2,9 @@ from datetime import date
 from flask import Blueprint, request, jsonify
 from backend.models import db, Grades
 from backend.auth import login_required, get_current_user, can_access_student
+from backend.audit import audit
 from backend.policies import is_student, supervised_student_ids
+from backend.validation import parse_int, parse_str
 
 bp = Blueprint("api_grades", __name__, url_prefix="/api/grades")
 
@@ -53,8 +55,8 @@ def create_grade():
     actor = get_current_user()
     data = request.get_json(silent=True) or {}
 
-    subject = (data.get("subject") or "").strip()
-    title = (data.get("title") or "").strip()
+    subject = parse_str(data.get("subject"), "Fach")
+    title = parse_str(data.get("title"), "Titel")
     grade_val = data.get("grade")
 
     if not subject or not title or grade_val is None:
@@ -68,10 +70,12 @@ def create_grade():
     if not (1.0 <= grade_float <= 6.0):
         return jsonify({"error": "Die Note muss zwischen 1.0 und 6.0 liegen."}), 400
 
-    student_id = data.get("student") if actor.role == "ausbildner" else actor.id
-    if not student_id:
-        return jsonify({"error": "Lernende/r muss angegeben werden."}), 400
-    student_id = int(student_id)
+    if actor.role == "ausbildner":
+        if data.get("student") in (None, ""):
+            return jsonify({"error": "Lernende/r muss angegeben werden."}), 400
+        student_id = parse_int(data.get("student"), "Lernende/r", min_value=1)
+    else:
+        student_id = actor.id
 
     if not can_access_student(actor, student_id):
         return jsonify({"error": "Keine Berechtigung."}), 403
@@ -82,10 +86,11 @@ def create_grade():
         date=parse_date(data.get("date")),
         grade=round(grade_float, 2),
         title=title,
-        comment=(data.get("comment") or "").strip(),
+        comment=parse_str(data.get("comment"), "Kommentar"),
     )
     db.session.add(new_grade)
     db.session.commit()
+    audit("grade_created", grade_id=new_grade.id, student_id=student_id)
     return jsonify({"data": new_grade.to_dict()}), 201
 
 
@@ -101,14 +106,18 @@ def update_grade(grade_id):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     data = request.get_json(silent=True) or {}
-    if "subject" in data and data["subject"].strip():
-        grade_obj.subject = data["subject"].strip()
-    if "title" in data and data["title"].strip():
-        grade_obj.title = data["title"].strip()
+    if "subject" in data:
+        subject = parse_str(data.get("subject"), "Fach")
+        if subject:
+            grade_obj.subject = subject
+    if "title" in data:
+        title = parse_str(data.get("title"), "Titel")
+        if title:
+            grade_obj.title = title
     if "date" in data:
         grade_obj.date = parse_date(data.get("date"))
     if "comment" in data:
-        grade_obj.comment = (data.get("comment") or "").strip()
+        grade_obj.comment = parse_str(data.get("comment"), "Kommentar")
     if "grade" in data:
         try:
             val = float(data["grade"])
@@ -121,6 +130,11 @@ def update_grade(grade_id):
             return jsonify({"error": "Ungültiger Notenwert."}), 400
 
     db.session.commit()
+    audit(
+        "grade_updated",
+        grade_id=grade_obj.id,
+        student_id=grade_obj.student,
+    )
     return jsonify({"data": grade_obj.to_dict()})
 
 
@@ -135,6 +149,8 @@ def delete_grade(grade_id):
     if not can_access_student(actor, grade_obj.student):
         return jsonify({"error": "Keine Berechtigung."}), 403
 
+    student_id = grade_obj.student
     db.session.delete(grade_obj)
     db.session.commit()
+    audit("grade_deleted", grade_id=grade_id, student_id=student_id)
     return jsonify({"data": {"deleted": grade_id}})
