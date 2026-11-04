@@ -12,6 +12,12 @@ from backend.policies import (
 )
 from backend.validation import parse_bool, parse_int, parse_str
 
+
+def _not_found():
+    """Consistent 404 for foreign-company or otherwise inaccessible records."""
+    return jsonify({"error": "Nicht gefunden."}), 404
+
+
 bp = Blueprint("api_evaluation", __name__, url_prefix="/api/evaluation")
 
 
@@ -43,11 +49,11 @@ def list_evaluations():
 
     if is_student(actor):
         if student_id and student_id != actor.id:
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         query = query.filter_by(student=actor.id)
     elif student_id:
         if not can_access_student(actor, student_id):
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         query = query.filter_by(student=student_id)
     else:
         sub_ids = supervised_student_ids(actor)
@@ -89,7 +95,7 @@ def create_evaluation():
     student_id = parse_int(data.get("student"), "Lernende/r", min_value=1)
 
     if not can_access_student(actor, student_id):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
     participation_id = parse_int(
         data.get("participation"), "Teilnahme", allow_none=True, min_value=1
@@ -175,7 +181,7 @@ def save_project_evaluation(project_id):
     is_released = False
     if student_id:
         if not can_access_student(actor, student_id):
-            return jsonify({"error": "Keine Berechtigung für diese/n Lernende/n."}), 403
+            return _not_found()
 
         is_released = parse_bool(
             data.get("eval_released", data.get("is_released")), "Freigabe"
@@ -307,7 +313,7 @@ def update_evaluation(eval_id):
     if not can_access_student(actor, evaluation.student) or not can_manage_project(
         actor, evaluation.project_rel
     ):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
 
     data = request.get_json(silent=True) or {}
@@ -390,7 +396,7 @@ def delete_evaluation(eval_id):
     if not can_access_student(actor, evaluation.student) or not can_manage_project(
         actor, evaluation.project_rel
     ):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
 
     project_id = evaluation.project

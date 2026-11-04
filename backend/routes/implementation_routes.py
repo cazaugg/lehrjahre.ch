@@ -14,6 +14,12 @@ from backend.policies import (
 )
 from backend.validation import parse_bool, parse_int, parse_str
 
+
+def _not_found():
+    """Consistent 404 for foreign-company or otherwise inaccessible records."""
+    return jsonify({"error": "Nicht gefunden."}), 404
+
+
 bp = Blueprint("api_implementation", __name__, url_prefix="/api/implementation")
 
 
@@ -46,11 +52,11 @@ def list_implementations():
 
     if is_student(actor):
         if student_id and student_id != actor.id:
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         query = query.filter_by(student=actor.id)
     elif student_id:
         if not can_access_student(actor, student_id):
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         query = query.filter_by(student=student_id)
     else:
         sub_ids = supervised_student_ids(actor)
@@ -194,7 +200,7 @@ def update_implementation(part_id):
     if not can_access_student(actor, part.student) or not can_view_project(
         actor, part.project_rel
     ):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
     project = db.session.get(Project, part.project)
     root_project = (
@@ -209,7 +215,7 @@ def update_implementation(part_id):
 
     if is_student(actor):
         if part.student != actor.id:
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         if part.is_done:
             return jsonify(
                 {
@@ -272,7 +278,7 @@ def update_implementation(part_id):
         ):
             part.supervisor = actor.id
     else:
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
     db.session.commit()
     audit(
@@ -294,7 +300,7 @@ def delete_implementation(part_id):
         return jsonify({"error": "Eintrag nicht gefunden."}), 404
 
     if not is_student(actor) or part.student != actor.id:
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
     if part.is_done:
         return jsonify(
             {"error": "Abgegebene Arbeitsberichte können nicht gelöscht werden."}

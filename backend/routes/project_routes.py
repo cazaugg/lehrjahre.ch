@@ -43,6 +43,35 @@ def serialize_goals(goals_input) -> str:
     return "[]"
 
 
+def _validated_assigned_students(actor: User, students_input):
+    """Return (json_string, error). Only same-company learners are kept.
+
+    Foreign-company IDs are rejected with a 400 rather than silently dropped:
+    they usually indicate a client bug or a probing attempt.
+    """
+    if not students_input:
+        return "[]", None
+    if not isinstance(students_input, list):
+        return None, "Ungültige Zuordnung von Lernenden."
+    cleaned = []
+    for s in students_input:
+        try:
+            val = int(s)
+        except (TypeError, ValueError):
+            return None, "Ungültige Zuordnung von Lernenden."
+        if val not in cleaned:
+            cleaned.append(val)
+    for val in cleaned:
+        user = db.session.get(User, val)
+        if (
+            not user
+            or user.company_id != actor.company_id
+            or user.role != "lernender"
+        ):
+            return None, "Ungültige Zuordnung von Lernenden."
+    return json.dumps(cleaned), None
+
+
 def serialize_students(students_input) -> str:
     if not students_input:
         return "[]"
@@ -203,6 +232,8 @@ def _sync_subtasks(parent_project: Project, tasks_payload: list, actor: User):
         doc_id = doc.id if doc else None
 
         if existing_task:
+            if not can_manage_project(actor, existing_task):
+                return "Keine Berechtigung für eine der Teilaufgaben."
             task = existing_task
             kept_ids.add(task.id)
             task.title = t_title
@@ -235,6 +266,8 @@ def _sync_subtasks(parent_project: Project, tasks_payload: list, actor: User):
 
     for old_id, old_task in existing_tasks.items():
         if old_id not in kept_ids:
+            if not can_manage_project(actor, old_task):
+                return "Keine Berechtigung für eine der Teilaufgaben."
             db.session.delete(old_task)
 
     return None
@@ -341,6 +374,11 @@ def create_project():
     doc, document_error = _validated_project_document(actor, data.get("document_id"))
     if document_error:
         return jsonify({"error": document_error}), 400
+    assigned_students_json, students_error = _validated_assigned_students(
+        actor, data.get("assigned_students")
+    )
+    if students_error:
+        return jsonify({"error": students_error}), 400
     doc_id = doc.id if doc else None
     is_published = parse_bool(
         data.get("is_published", data.get("planning_released")),
@@ -361,7 +399,7 @@ def create_project():
         document_id=doc_id,
         author=actor.id,
         goals=serialize_goals(data.get("goals")),
-        assigned_students=serialize_students(data.get("assigned_students")),
+        assigned_students=assigned_students_json,
         start_date=parse_date(data.get("start_date")),
         due_date=parse_date(data.get("due_date")),
         is_published=is_published,
@@ -444,7 +482,12 @@ def update_project(project_id):
     if "goals" in data:
         project.goals = serialize_goals(data.get("goals"))
     if "assigned_students" in data:
-        project.assigned_students = serialize_students(data.get("assigned_students"))
+        assigned_students_json, students_error = _validated_assigned_students(
+            actor, data.get("assigned_students")
+        )
+        if students_error:
+            return jsonify({"error": students_error}), 400
+        project.assigned_students = assigned_students_json
     if "start_date" in data:
         project.start_date = parse_date(data.get("start_date"))
     if "due_date" in data:
@@ -481,10 +524,14 @@ def update_project(project_id):
     else:
         # Keep existing child tasks in sync with publication/completion/students
         for child in Project.query.filter_by(parent_project=project.id).all():
-            child.is_published = project.is_published
-            child.planning_released = project.planning_released
-            child.is_completed = project.is_completed
-            child.assigned_students = project.assigned_students
+            # Visibility of a child via its parent does not grant management of
+            # the child itself. Flag sync must never mutate a foreign child;
+            # leave it unchanged rather than failing the whole parent update.
+            if can_manage_project(actor, child):
+                child.is_published = project.is_published
+                child.planning_released = project.planning_released
+                child.is_completed = project.is_completed
+                child.assigned_students = project.assigned_students
 
     db.session.commit()
     audit("project_updated", project_id=project.id)

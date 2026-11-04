@@ -44,6 +44,34 @@ MASTER_FIELDS = [
 ]
 
 
+def _invalidate_supervised_cache():
+    if hasattr(g, "_supervised_student_ids"):
+        delattr(g, "_supervised_student_ids")
+
+
+def _validated_relation_pair(supervisor_id: int, student_id: int, actor: User):
+    """Return (supervisor, student, error) for a relation pair write.
+
+    Supervisors may assign themselves or peers, but the pair must always be
+    a same-company ausbildner -> lernender link, and never a self-pair.
+    """
+    error = "Ungültige Benutzerzuordnung."
+    if supervisor_id == student_id:
+        return None, None, "Eine Zugordnung zwischen zwei Ausbildnern oder einer Person mit sich selbst ist nicht zulässig."
+    sup = db.session.get(User, supervisor_id)
+    stu = db.session.get(User, student_id)
+    if (
+        not sup
+        or not stu
+        or sup.company_id != actor.company_id
+        or stu.company_id != actor.company_id
+    ):
+        return None, None, error
+    if sup.role != "ausbildner" or stu.role != "lernender":
+        return None, None, error
+    return sup, stu, None
+
+
 def parse_date(val):
     if not val:
         return None
@@ -109,8 +137,9 @@ def create_user():
     company = actor.company_rel
 
     data = request.get_json(silent=True) or {}
-    role = parse_str(data.get("role"), "Rolle", default="lernender").lower()
-    if role not in {"lernender", "ausbildner"}:
+    raw_role = parse_str(data.get("role"), "Rolle", default="lernender")
+    role = raw_role.lower()
+    if raw_role != role or role not in {"lernender", "ausbildner"}:
         return jsonify({"error": "Ungültige Rolle."}), 400
 
     name = parse_str(data.get("name"), "Vorname")
@@ -182,25 +211,30 @@ def create_user():
     )
     db.session.add(new_user)
     db.session.commit()
-    audit("user_created", user_id=new_user.id, role=role, company_id=new_user.company_id)
+    audit(
+        "user_created",
+        user_id=new_user.id,
+        role=role,
+        company_id=new_user.company_id,
+        role_elevation=bool(role == "ausbildner"),
+    )
 
     # Optional initial supervisor relation
     if role == "lernender" and supervisor_id:
-        sup = db.session.get(User, supervisor_id)
-        if (
-            sup
-            and sup.company_id == new_user.company_id
-            and sup.role == "ausbildner"
-        ):
-            db.session.add(UserRelation(supervisor=sup.id, student=new_user.id))
-            db.session.commit()
-            audit(
-                "relation_added",
-                supervisor_id=sup.id,
-                student_id=new_user.id,
-            )
-            if hasattr(g, "_supervised_student_ids"):
-                delattr(g, "_supervised_student_ids")
+        sup, _stu, relation_error = _validated_relation_pair(
+            supervisor_id, new_user.id, actor
+        )
+        if relation_error:
+            return jsonify({"error": relation_error}), 400
+        db.session.add(UserRelation(supervisor=sup.id, student=new_user.id))
+        db.session.commit()
+        audit(
+            "relation_added",
+            supervisor_id=sup.id,
+            student_id=new_user.id,
+            self_assigned=bool(sup.id == actor.id),
+        )
+        _invalidate_supervised_cache()
 
     return jsonify({"data": serialize_user(new_user, actor)}), 201
 
@@ -289,6 +323,16 @@ def update_user(user_id):
                 target.job_title = job_title
         if "role" in data:
             role = parse_str(data.get("role"), "Rolle")
+            if role == "ausbildner" and target.role != "ausbildner":
+                # Promotion to supervisor stays with the current model (any
+                # supervisor), but it must be an explicit, audit-logged event.
+                # No silent role escalation through master-data edits.
+                if data.get("confirm_role_elevation") is not True:
+                    return jsonify(
+                        {
+                            "error": "Zum Ausbildner ernennen erfordert confirm_role_elevation=true."
+                        }
+                    ), 403
             if role in {"lernender", "ausbildner"}:
                 target.role = role
         if "company_email" in data and incoming_company_email:
@@ -346,6 +390,9 @@ def update_user(user_id):
         user_id=target.id,
         password_changed=bool(new_pw),
         role=target.role,
+        role_elevation=bool(
+            actor.id != target.id and target.role == "ausbildner"
+        ),
     )
     return jsonify({"data": serialize_user(target, actor)})
 
@@ -399,15 +446,11 @@ def add_relation():
     supervisor_id = parse_int(data.get("supervisor"), "Ausbildner", min_value=1)
     student_id = parse_int(data.get("student"), "Lernende/r", min_value=1)
 
-    sup = db.session.get(User, supervisor_id)
-    stu = db.session.get(User, student_id)
-    if (
-        not sup
-        or not stu
-        or sup.company_id != actor.company_id
-        or stu.company_id != actor.company_id
-    ):
-        return jsonify({"error": "Ungültige Benutzerzuordnung."}), 400
+    sup, stu, relation_error = _validated_relation_pair(
+        supervisor_id, student_id, actor
+    )
+    if relation_error or not sup or not stu:
+        return jsonify({"error": relation_error or "Ungültige Benutzerzuordnung."}), 400
 
     existing = UserRelation.query.filter_by(
         supervisor=sup.id, student=stu.id
@@ -418,9 +461,13 @@ def add_relation():
     rel = UserRelation(supervisor=sup.id, student=stu.id)
     db.session.add(rel)
     db.session.commit()
-    audit("relation_added", supervisor_id=sup.id, student_id=stu.id)
-    if hasattr(g, "_supervised_student_ids"):
-        delattr(g, "_supervised_student_ids")
+    audit(
+        "relation_added",
+        supervisor_id=sup.id,
+        student_id=stu.id,
+        self_assigned=bool(sup.id == actor.id),
+    )
+    _invalidate_supervised_cache()
     return jsonify({"data": rel.to_dict()}), 201
 
 
@@ -433,7 +480,15 @@ def remove_relation(relation_id):
         return jsonify({"error": "Zuordnung nicht gefunden."}), 404
 
     stu = db.session.get(User, rel.student)
-    if not stu or stu.company_id != actor.company_id:
+    sup = db.session.get(User, rel.supervisor)
+    if not stu or not sup or stu.company_id != actor.company_id or sup.company_id != actor.company_id:
+        return jsonify({"error": "Keine Berechtigung."}), 403
+    if sup.role != "ausbildner" or stu.role != "lernender":
+        return jsonify({"error": "Keine Berechtigung."}), 403
+
+    # A supervisor may only remove their own assignments. Supervisors who are
+    # not party to the pair keep their access, but may not sever it.
+    if rel.supervisor != actor.id:
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     supervisor_id = rel.supervisor
@@ -444,7 +499,25 @@ def remove_relation(relation_id):
         "relation_removed",
         supervisor_id=supervisor_id,
         student_id=student_id,
+        self_assigned=bool(supervisor_id == actor.id),
     )
-    if hasattr(g, "_supervised_student_ids"):
-        delattr(g, "_supervised_student_ids")
+    _invalidate_supervised_cache()
     return jsonify({"data": {"deleted": relation_id}})
+
+
+@bp.route("/relation", methods=["GET"])
+@login_required
+def list_relations():
+    actor = get_current_user()
+    supervisor_filter = request.args.get("supervisor", type=int)
+    student_filter = request.args.get("student", type=int)
+
+    query = UserRelation.query.join(User, UserRelation.student == User.id).filter(
+        User.company_id == actor.company_id
+    )
+    if supervisor_filter is not None:
+        query = query.filter(UserRelation.supervisor == supervisor_filter)
+    if student_filter is not None:
+        query = query.filter(UserRelation.student == student_filter)
+    relations = query.order_by(UserRelation.id.asc()).all()
+    return jsonify({"data": [r.to_dict() for r in relations]})

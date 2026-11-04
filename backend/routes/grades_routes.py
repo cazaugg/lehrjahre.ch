@@ -6,6 +6,12 @@ from backend.audit import audit
 from backend.policies import is_student, supervised_student_ids
 from backend.validation import parse_int, parse_str
 
+
+def _not_found():
+    """Consistent 404 for foreign-company or otherwise inaccessible records."""
+    return jsonify({"error": "Nicht gefunden."}), 404
+
+
 bp = Blueprint("api_grades", __name__, url_prefix="/api/grades")
 
 
@@ -30,11 +36,11 @@ def list_grades():
     query = Grades.query
     if is_student(actor):
         if student_id and student_id != actor.id:
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         query = query.filter_by(student=actor.id)
     elif student_id:
         if not can_access_student(actor, student_id):
-            return jsonify({"error": "Keine Berechtigung."}), 403
+            return _not_found()
         query = query.filter_by(student=student_id)
     else:
         sub_ids = supervised_student_ids(actor)
@@ -78,7 +84,7 @@ def create_grade():
         student_id = actor.id
 
     if not can_access_student(actor, student_id):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
     new_grade = Grades(
         student=student_id,
@@ -103,7 +109,7 @@ def update_grade(grade_id):
         return jsonify({"error": "Note nicht gefunden."}), 404
 
     if not can_access_student(actor, grade_obj.student):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
     data = request.get_json(silent=True) or {}
     if "subject" in data:
@@ -147,7 +153,7 @@ def delete_grade(grade_id):
         return jsonify({"error": "Note nicht gefunden."}), 404
 
     if not can_access_student(actor, grade_obj.student):
-        return jsonify({"error": "Keine Berechtigung."}), 403
+        return _not_found()
 
     student_id = grade_obj.student
     db.session.delete(grade_obj)

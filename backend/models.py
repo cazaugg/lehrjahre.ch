@@ -164,6 +164,10 @@ class User(db.Model):
 
 class UserRelation(db.Model):
     __tablename__ = "user_relation"
+    __table_args__ = (
+        db.UniqueConstraint("supervisor", "student", name="uq_user_relation_pair"),
+        db.CheckConstraint("supervisor != student", name="ck_user_relation_not_self"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     supervisor = db.Column(
