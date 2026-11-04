@@ -3,7 +3,9 @@ import { ref, computed, onMounted } from 'vue'
 import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
+import DocumentViewer from '../components/ui/DocumentViewer.vue'
 import EditButton from '../components/ui/EditButton.vue'
+import { getDocumentDownloadUrl } from '../utils/documents'
 
 const auth = useAuthStore()
 const nodes = ref([])
@@ -420,23 +422,42 @@ async function deleteNode(node) {
                     </div>
                   </div>
 
-                  <div v-if="canManage(page)" class="flex-gap" @click.stop>
+                  <div
+                    v-if="page.document || canManage(page)"
+                    class="flex-gap"
+                    @click.stop
+                  >
                     <EditButton
-                      label="Seite bearbeiten"
-                      icon="edit"
-                      @click="startEdit(page)"
+                      v-if="page.document"
+                      label="Seite herunterladen"
+                      icon="download"
+                      :href="getDocumentDownloadUrl(page.document.id)"
+                      target="_self"
                     />
-                    <EditButton
-                      label="Seite löschen"
-                      icon="delete"
-                      variant="danger"
-                      @click="deleteNode(page)"
-                    />
+                    <template v-if="canManage(page)">
+                      <EditButton
+                        label="Seite bearbeiten"
+                        icon="edit"
+                        @click="startEdit(page)"
+                      />
+                      <EditButton
+                        label="Seite löschen"
+                        icon="delete"
+                        variant="danger"
+                        @click="deleteNode(page)"
+                      />
+                    </template>
                   </div>
                 </div>
 
                 <div v-if="expandedIds[page.id]" class="collapsible-body">
-                  <MarkdownEditor :model-value="page.content" :readonly="true" />
+                  <DocumentViewer
+                    v-if="page.document"
+                    :document="{ ...page.document, content: page.content }"
+                    :always-open="true"
+                    :show-header="false"
+                    :show-download="false"
+                  />
                 </div>
               </div>
             </div>

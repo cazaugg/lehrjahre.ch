@@ -4,6 +4,10 @@ import { useRoute } from 'vue-router'
 import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
+import DocumentViewer from '../components/ui/DocumentViewer.vue'
+import ProjectStudentList from '../components/ui/ProjectStudentList.vue'
+import ProjectStudentReview from '../components/ui/ProjectStudentReview.vue'
+import { isMarkdownEditable } from '../utils/documents'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -21,6 +25,14 @@ const selectedStudentId = ref(null)
 
 // Local draft state for student submissions keyed by target project/task ID
 const drafts = ref({})
+
+// Full-page Markdown editor for the current submission target
+const editingSubmissionTarget = ref(null)
+const editorContent = ref('')
+const editorLoading = ref(false)
+
+const SUBMISSION_FILE_ACCEPT =
+  '.pdf,.docx,.xlsx,.zip,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.md'
 
 const hasSubtasks = computed(
   () => (project.value?.tasks || []).length > 0
@@ -60,12 +72,11 @@ const activeStudentId = computed(() => {
 async function loadProject() {
   loading.value = true
   error.value = ''
+  editingSubmissionTarget.value = null
+  editorContent.value = ''
   try {
     const data = await apiFetch(`/api/project/${projectId.value}`)
     project.value = data
-    if (auth.isTrainer && !selectedStudentId.value && availableStudents.value.length > 0) {
-      selectedStudentId.value = availableStudents.value[0].id
-    }
     initDrafts()
   } catch (e) {
     error.value = e.message
@@ -75,7 +86,10 @@ async function loadProject() {
 }
 
 onMounted(loadProject)
-watch(() => route.params.id, loadProject)
+watch(() => route.params.id, () => {
+  selectedStudentId.value = null
+  loadProject()
+})
 
 function getParticipation(targetId, studentId = activeStudentId.value) {
   if (!project.value || !studentId) return null
@@ -86,16 +100,47 @@ function getParticipation(targetId, studentId = activeStudentId.value) {
   )
 }
 
+function toggleStudent(studentId) {
+  selectedStudentId.value =
+    selectedStudentId.value === studentId ? null : studentId
+}
+
+function emptyDraft() {
+  return {
+    document: null,
+    document_id: null,
+    pendingFile: null,
+    docMode: 'none',
+    docContent: '',
+    docEdited: false,
+    originalDocumentId: null
+  }
+}
+
+function ensureDraft(targetId) {
+  if (!drafts.value[targetId]) {
+    drafts.value[targetId] = emptyDraft()
+  }
+  return drafts.value[targetId]
+}
+
 function initDrafts() {
-  if (!project.value || !auth.isStudent) return
+  if (!project.value || !auth.isStudent) {
+    drafts.value = {}
+    return
+  }
   const map = {}
   for (const target of submissionTargets.value) {
     const existing = getParticipation(target.id, auth.user?.id)
+    const doc = existing?.document || null
     map[target.id] = {
-      text: existing?.text || '',
-      document: existing?.document || null,
+      document: doc,
       document_id: existing?.document_id || null,
-      pendingFile: null
+      pendingFile: null,
+      docMode: doc ? (isMarkdownEditable(doc) ? 'text' : 'file') : 'none',
+      docContent: '',
+      docEdited: false,
+      originalDocumentId: existing?.document_id || null
     }
   }
   drafts.value = map
@@ -103,36 +148,115 @@ function initDrafts() {
 
 function onSubmissionFileChange(targetId, event) {
   const file = event.target.files?.[0] || null
-  if (!drafts.value[targetId]) {
-    drafts.value[targetId] = { text: '', document: null, document_id: null, pendingFile: null }
-  }
-  drafts.value[targetId].pendingFile = file
+  const draft = ensureDraft(targetId)
+  draft.pendingFile = file
+  if (file) draft.docMode = 'file'
+  event.target.value = ''
+}
+
+function clearPendingFile(targetId) {
+  const draft = ensureDraft(targetId)
+  draft.pendingFile = null
+  draft.docMode = draft.document
+    ? isMarkdownEditable(draft.document)
+      ? 'text'
+      : 'file'
+    : 'none'
 }
 
 function removeSubmissionDoc(targetId) {
-  if (!drafts.value[targetId]) return
-  drafts.value[targetId].document = null
-  drafts.value[targetId].document_id = null
-  drafts.value[targetId].pendingFile = null
+  const draft = ensureDraft(targetId)
+  draft.document = null
+  draft.document_id = null
+  draft.pendingFile = null
+  draft.docContent = ''
+  draft.docEdited = false
+  draft.docMode = 'none'
+}
+
+async function openTextEditor(target) {
+  error.value = ''
+  editorLoading.value = false
+  const draft = ensureDraft(target.id)
+  editorContent.value = draft.docContent || ''
+
+  const doc = draft.document
+  if (doc && isMarkdownEditable(doc)) {
+    if (!editorContent.value) {
+      editorLoading.value = true
+      try {
+        const data = await apiFetch(`/api/documents/${doc.id}`)
+        editorContent.value = data?.content || ''
+        draft.docContent = editorContent.value
+      } catch (e) {
+        error.value = e.message
+        return
+      } finally {
+        editorLoading.value = false
+      }
+    }
+  } else if (!doc && !editorContent.value) {
+    const existing = getParticipation(target.id, auth.user?.id)
+    if (existing?.text) {
+      editorContent.value = existing.text
+    }
+  }
+
+  editingSubmissionTarget.value = target
+}
+
+function closeTextEditor() {
+  if (editingSubmissionTarget.value) {
+    const draft = ensureDraft(editingSubmissionTarget.value.id)
+    draft.docMode = draft.pendingFile
+      ? 'file'
+      : draft.document
+        ? isMarkdownEditable(draft.document)
+          ? 'text'
+          : 'file'
+        : 'none'
+    draft.docContent = ''
+    draft.docEdited = false
+  }
+  editingSubmissionTarget.value = null
+  editorContent.value = ''
+  editorLoading.value = false
+  error.value = ''
+}
+
+async function saveFromEditor(target, releaseNow = false) {
+  const draft = ensureDraft(target.id)
+  draft.docContent = editorContent.value
+  draft.docMode = 'text'
+  draft.docEdited = true
+  const saved = await saveStudentSubmission(target, releaseNow)
+  if (saved) {
+    editingSubmissionTarget.value = null
+    editorContent.value = ''
+  }
 }
 
 async function saveStudentSubmission(target, releaseNow = false) {
   error.value = ''
   successMsg.value = ''
-  const draft = drafts.value[target.id] || {
-    text: '',
-    document: null,
-    document_id: null,
-    pendingFile: null
+  const draft = ensureDraft(target.id)
+  const hasDoc = Boolean(draft.document?.id || draft.document_id || draft.pendingFile)
+  const textContent = (draft.docContent || '').trim()
+  const hasTextDoc = draft.docMode === 'text' && Boolean(textContent)
+
+  if (draft.docMode === 'text' && draft.docEdited && !textContent) {
+    error.value = 'Bitte erfassen Sie einen Inhalt für das Textdokument.'
+    return false
   }
 
-  const hasText = Boolean((draft.text || '').trim())
-  const hasDoc = Boolean(draft.document?.id || draft.document_id || draft.pendingFile)
+  if (draft.docMode === 'text' && !draft.docEdited && !hasDoc) {
+    error.value = 'Bitte erfassen Sie einen Inhalt für das Textdokument.'
+    return false
+  }
 
-  if (releaseNow && !hasText && !hasDoc) {
-    error.value =
-      'Für die Abgabe muss mindestens ein Text oder ein Dokument eingereicht werden.'
-    return
+  if (releaseNow && !hasDoc && !hasTextDoc) {
+    error.value = 'Für die Abgabe muss ein Dokument eingereicht werden.'
+    return false
   }
 
   if (
@@ -141,16 +265,43 @@ async function saveStudentSubmission(target, releaseNow = false) {
       'Möchten Sie diese Abgabe verbindlich freigeben? Nach der Freigabe kann nichts mehr geändert werden.'
     )
   ) {
-    return
+    return false
   }
 
   savingTargetId.value = target.id
+  let createdDocId = null
   try {
     let docId = draft.document?.id || draft.document_id || null
-    if (draft.pendingFile) {
+    const docName = `Abgabe: ${target.title}`
+
+    if (draft.docMode === 'text' && textContent) {
+      const existingDoc = draft.document
+      if (existingDoc && isMarkdownEditable(existingDoc)) {
+        const updated = await apiFetch(`/api/documents/${existingDoc.id}`, {
+          method: 'PUT',
+          body: { name: docName, content: textContent }
+        })
+        docId = updated.id
+      } else {
+        const created = await apiFetch('/api/documents', {
+          method: 'POST',
+          body: {
+            name: docName,
+            description: '',
+            content: textContent,
+            type: 'projekt',
+            owner: auth.user?.id,
+            is_done: true,
+            is_template: false
+          }
+        })
+        docId = created.id
+        createdDocId = created.id
+      }
+    } else if (draft.docMode === 'file' && draft.pendingFile) {
       const fd = new FormData()
       fd.append('file', draft.pendingFile)
-      fd.append('name', `Abgabe: ${target.title}`)
+      fd.append('name', docName)
       fd.append('type', 'projekt')
       fd.append('owner', String(auth.user?.id))
       fd.append('is_done', 'true')
@@ -159,38 +310,58 @@ async function saveStudentSubmission(target, releaseNow = false) {
         body: fd
       })
       docId = uploaded.id
+      createdDocId = uploaded.id
+    } else if (draft.docMode === 'none') {
+      docId = null
     }
 
     const existing = getParticipation(target.id, auth.user?.id)
+    const payload = {
+      title: target.title,
+      // Keep legacy text only when no document replaces it.
+      text: docId ? '' : existing?.text || '',
+      document_id: docId,
+      is_done: releaseNow
+    }
     if (existing) {
       await apiFetch(`/api/implementation/${existing.id}`, {
         method: 'PUT',
-        body: {
-          title: target.title,
-          text: (draft.text || '').trim(),
-          document_id: docId,
-          is_done: releaseNow
-        }
+        body: payload
       })
     } else {
       await apiFetch('/api/implementation', {
         method: 'POST',
         body: {
           project: target.id,
-          title: target.title,
-          text: (draft.text || '').trim(),
-          document_id: docId,
-          is_done: releaseNow
+          ...payload
         }
       })
+    }
+
+    const oldDocId = draft.originalDocumentId
+    if (oldDocId && oldDocId !== docId) {
+      try {
+        await apiFetch(`/api/documents/${oldDocId}`, { method: 'DELETE' })
+      } catch {
+        // The old document is already unlinked; an orphaned file is not fatal.
+      }
     }
 
     await loadProject()
     successMsg.value = releaseNow
       ? 'Abgabe erfolgreich eingereicht und freigegeben.'
       : 'Entwurf gespeichert.'
+    return true
   } catch (e) {
+    if (createdDocId) {
+      try {
+        await apiFetch(`/api/documents/${createdDocId}`, { method: 'DELETE' })
+      } catch {
+        // Best-effort cleanup after a failed participation save.
+      }
+    }
     error.value = e.message
+    return false
   } finally {
     savingTargetId.value = null
   }
@@ -270,10 +441,65 @@ function formatDate(d) {
 
 <template>
   <div>
-    <div v-if="loading" class="card">Lade Projekt...</div>
-    <div v-else-if="error && !project" class="alert alert-error">{{ error }}</div>
+    <form
+      v-if="editingSubmissionTarget"
+      class="editor-page"
+      @submit.prevent="saveFromEditor(editingSubmissionTarget, false)"
+    >
+      <div class="page-header">
+        <div>
+          <div class="flex-gap" style="margin-bottom: 6px">
+            <button type="button" class="btn btn-sm" @click="closeTextEditor">
+              ← Zurück zur Abgabe
+            </button>
+            <span class="badge badge-info">
+              {{ editingSubmissionTarget.indexLabel }}
+            </span>
+          </div>
+          <h1 class="page-title">Abgabe: {{ editingSubmissionTarget.title }}</h1>
+          <p class="page-subtitle">Textdokument für die Projektdurchführung</p>
+        </div>
+        <div class="editor-header-actions">
+          <button type="button" class="btn" @click="closeTextEditor">
+            Abbrechen
+          </button>
+          <button
+            type="submit"
+            class="btn"
+            :disabled="savingTargetId === editingSubmissionTarget.id"
+          >
+            Zwischenspeichern
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary"
+            :disabled="savingTargetId === editingSubmissionTarget.id"
+            @click="saveFromEditor(editingSubmissionTarget, true)"
+          >
+            Abgeben / Freigeben
+          </button>
+        </div>
+      </div>
 
-    <div v-else-if="project">
+      <div v-if="error" class="alert alert-error">{{ error }}</div>
+
+      <div v-if="editorLoading" class="card">Dokument wird geladen...</div>
+      <div v-else class="editor-card">
+        <MarkdownEditor
+          v-model="editorContent"
+          :full-page="true"
+          :owner-id="auth.user?.id"
+          attachment-type="projekt"
+          placeholder="Ausgeführte Arbeiten, Erkenntnisse, Messresultate..."
+        />
+      </div>
+    </form>
+
+    <template v-else>
+      <div v-if="loading" class="card">Lade Projekt...</div>
+      <div v-else-if="error && !project" class="alert alert-error">{{ error }}</div>
+
+      <div v-else-if="project">
       <!-- Page Header -->
       <div class="page-header">
         <div>
@@ -333,7 +559,11 @@ function formatDate(d) {
 
         <!-- Zugewiesene Lernende -->
         <div
-          v-if="project.assigned_student_users && project.assigned_student_users.length > 0"
+          v-if="
+            !auth.isTrainer &&
+            project.assigned_student_users &&
+            project.assigned_student_users.length > 0
+          "
           class="detail-item"
         >
           <div class="detail-label">Zugewiesene Lernende</div>
@@ -360,15 +590,7 @@ function formatDate(d) {
         <div v-if="project.document" class="detail-item">
           <div class="detail-label">Projektdokument</div>
           <div class="doc-link-bar">
-            <span>📄 <strong>{{ project.document.name }}</strong> ({{ project.document.filename }})</span>
-            <a
-              :href="`/api/documents/${project.document.id}/file`"
-              target="_blank"
-              rel="noopener"
-              class="btn btn-sm btn-primary"
-            >
-              Dokument öffnen
-            </a>
+            <DocumentViewer :document="project.document" />
           </div>
         </div>
 
@@ -403,56 +625,45 @@ function formatDate(d) {
               >
                 {{ task.description }}
               </p>
-              <div v-if="task.document" style="margin-top: 8px">
-                <a
-                  :href="`/api/documents/${task.document.id}/file`"
-                  target="_blank"
-                  rel="noopener"
-                  class="btn btn-sm"
-                >
-                  📄 Aufgabendokument: {{ task.document.name }}
-                </a>
+              <div v-if="task.document" class="doc-link-bar" style="margin-top: 8px">
+                <DocumentViewer :document="task.document" />
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Student selector for Trainers (applies to Durchführung & Auswertung) -->
-      <div
-        v-if="auth.isTrainer && availableStudents.length > 0"
-        class="card student-switcher-bar"
+      <!-- Lernende: Abgabe & Auswertung pro Lernende/r -->
+      <ProjectStudentList
+        v-if="auth.isTrainer"
+        :project="project"
+        :students="availableStudents"
+        :selected-student-id="selectedStudentId"
+        @toggle="toggleStudent"
       >
-        <span class="form-label" style="margin: 0">
-          Ansicht für Lernende/n:
-        </span>
-        <div class="flex-gap">
-          <button
-            v-for="stu in availableStudents"
-            :key="stu.id"
-            type="button"
-            class="btn btn-sm"
-            :class="{ 'btn-primary': selectedStudentId === stu.id }"
-            @click="selectedStudentId = stu.id"
-          >
-            {{ stu.full_name }}
-          </button>
-        </div>
-      </div>
+        <template #body="{ student }">
+          <ProjectStudentReview
+            :project="project"
+            :student="student"
+            @undo-release="undoStudentSubmission"
+          />
+        </template>
+      </ProjectStudentList>
 
-      <!-- ===================================================== -->
-      <!-- ABSCHNITT 2: DURCHFÜHRUNG                             -->
-      <!-- ===================================================== -->
-      <div class="card">
+      <template v-if="!auth.isTrainer">
+        <!-- ===================================================== -->
+        <!-- ABSCHNITT 2: DURCHFÜHRUNG                             -->
+        <!-- ===================================================== -->
+        <div class="card">
         <div class="card-header">
           <div>
             <h2 class="section-heading">2. Durchführung & Abgabe</h2>
             <span class="text-muted">
               <template v-if="hasSubtasks">
-                Pro zugeordneter Aufgabe wird ein Text und/oder ein Dokument eingereicht.
+                Pro zugeordneter Aufgabe wird ein Dokument eingereicht (Textdokument oder Datei).
               </template>
               <template v-else>
-                Da dieses Projekt keine Unteraufgaben hat, wird eine einzelne Projektabgabe (Text und/oder Dokument) eingereicht.
+                Da dieses Projekt keine Unteraufgaben hat, wird eine einzelne Projektabgabe als Dokument eingereicht.
               </template>
             </span>
           </div>
@@ -494,51 +705,80 @@ function formatDate(d) {
               "
             >
               <div class="form-group">
-                <label class="form-label">
-                  Text / Dokumentation (optional wenn Dokument hochgeladen wird)
-                </label>
-                <textarea
-                  v-if="drafts[target.id]"
-                  v-model="drafts[target.id].text"
-                  class="form-control"
-                  rows="4"
-                  placeholder="Ausgeführte Arbeiten, Erkenntnisse oder Notizen zur Abgabe..."
-                />
-              </div>
+                <label class="form-label">Dokument / Abgabe</label>
 
-              <div class="form-group">
-                <label class="form-label">
-                  Dokument einreichen (optional wenn Text vorhanden)
-                </label>
-                <div v-if="drafts[target.id]?.document" class="doc-link-bar">
+                <!-- Selected file, not uploaded yet -->
+                <div v-if="drafts[target.id]?.pendingFile" class="doc-link-bar">
                   <span>
-                    📄 <strong>{{ drafts[target.id].document.name }}</strong>
-                    ({{ drafts[target.id].document.filename }})
+                    📄 <strong>{{ drafts[target.id].pendingFile.name }}</strong>
+                    <span class="text-muted">
+                      · wird beim Speichern hochgeladen
+                      <template v-if="drafts[target.id].document">
+                        und ersetzt das bisherige Dokument
+                      </template>
+                    </span>
                   </span>
-                  <div class="flex-gap">
-                    <a
-                      :href="`/api/documents/${drafts[target.id].document.id}/file`"
-                      target="_blank"
-                      rel="noopener"
-                      class="btn btn-sm"
-                    >
-                      Öffnen
-                    </a>
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-danger"
-                      @click="removeSubmissionDoc(target.id)"
-                    >
-                      Entfernen
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    @click="clearPendingFile(target.id)"
+                  >
+                    Auswahl entfernen
+                  </button>
                 </div>
-                <div v-else>
-                  <input
-                    type="file"
-                    class="form-control"
-                    @change="(e) => onSubmissionFileChange(target.id, e)"
-                  />
+
+                <!-- Existing document -->
+                <template v-else-if="drafts[target.id]?.document">
+                  <div class="doc-link-bar">
+                    <DocumentViewer :document="drafts[target.id].document">
+                      <template #actions>
+                        <button
+                          v-if="isMarkdownEditable(drafts[target.id].document)"
+                          type="button"
+                          class="btn btn-sm"
+                          @click="openTextEditor(target)"
+                        >
+                          Bearbeiten
+                        </button>
+                        <label v-else class="btn btn-sm">
+                          Ersetzen
+                          <input
+                            type="file"
+                            :accept="SUBMISSION_FILE_ACCEPT"
+                            style="display: none"
+                            @change="(e) => onSubmissionFileChange(target.id, e)"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-danger"
+                          @click="removeSubmissionDoc(target.id)"
+                        >
+                          Entfernen
+                        </button>
+                      </template>
+                    </DocumentViewer>
+                  </div>
+                </template>
+
+                <!-- No document yet -->
+                <div v-else class="submission-doc-actions">
+                  <button
+                    type="button"
+                    class="btn btn-primary"
+                    @click="openTextEditor(target)"
+                  >
+                    Textdokument erstellen
+                  </button>
+                  <label class="btn">
+                    Datei hochladen
+                    <input
+                      type="file"
+                      :accept="SUBMISSION_FILE_ACCEPT"
+                      style="display: none"
+                      @change="(e) => onSubmissionFileChange(target.id, e)"
+                    />
+                  </label>
                 </div>
               </div>
 
@@ -589,18 +829,7 @@ function formatDate(d) {
                 >
                   <div class="detail-label">Eingereichtes Dokument</div>
                   <div class="doc-link-bar">
-                    <span>
-                      📄 <strong>{{ getParticipation(target.id).document.name }}</strong>
-                      ({{ getParticipation(target.id).document.filename }})
-                    </span>
-                    <a
-                      :href="`/api/documents/${getParticipation(target.id).document.id}/file`"
-                      target="_blank"
-                      rel="noopener"
-                      class="btn btn-sm btn-primary"
-                    >
-                      Dokument öffnen
-                    </a>
+                    <DocumentViewer :document="getParticipation(target.id).document" />
                   </div>
                 </div>
 
@@ -729,7 +958,9 @@ function formatDate(d) {
           </div>
         </div>
       </div>
+      </template>
     </div>
+    </template>
   </div>
 </template>
 
@@ -789,15 +1020,6 @@ function formatDate(d) {
   border-radius: var(--radius-sm);
 }
 
-.student-switcher-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-5);
-}
-
 .submission-list {
   display: flex;
   flex-direction: column;
@@ -809,5 +1031,12 @@ function formatDate(d) {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+}
+
+.submission-doc-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 </style>

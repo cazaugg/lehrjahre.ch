@@ -68,10 +68,9 @@ const hasGradesWithoutSemester = computed(() =>
   grades.value.some((g) => g.semester == null)
 )
 
-const filteredGrades = computed(() => {
+const gradesMatchingContext = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   return grades.value.filter((g) => {
-    if (filterStudent.value && g.student !== Number(filterStudent.value)) return false
     if (filterSubject.value && g.subject !== filterSubject.value) return false
     if (filterSemester.value === 'none' && g.semester != null) return false
     if (
@@ -89,10 +88,34 @@ const filteredGrades = computed(() => {
   })
 })
 
-const overallAverage = computed(() => {
-  if (filteredGrades.value.length === 0) return '–'
-  const sum = filteredGrades.value.reduce((acc, item) => acc + Number(item.grade), 0)
-  return (sum / filteredGrades.value.length).toFixed(2)
+const filteredGrades = computed(() => {
+  if (!filterStudent.value) return gradesMatchingContext.value
+  return gradesMatchingContext.value.filter(
+    (g) => g.student === Number(filterStudent.value)
+  )
+})
+
+const studentAverages = computed(() => {
+  const groups = new Map()
+  for (const grade of gradesMatchingContext.value) {
+    if (!groups.has(grade.student)) {
+      groups.set(grade.student, {
+        student: grade.student,
+        name: grade.student_name || 'Unbekannt',
+        total: 0,
+        count: 0
+      })
+    }
+    const group = groups.get(grade.student)
+    group.total += Number(grade.grade)
+    group.count += 1
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      average: (group.total / group.count).toFixed(2)
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'de-CH'))
 })
 
 function toggleExpandGrade(id) {
@@ -233,8 +256,24 @@ function formatDate(d) {
           <option v-if="hasGradesWithoutSemester" value="none">Ohne Semester</option>
         </select>
 
-        <span class="badge badge-info">Ø {{ overallAverage }}</span>
-        <span class="text-muted">{{ filteredGrades.length }} Prüfungen</span>
+      </div>
+
+      <!-- Average per student, respecting the active subject/semester/search filters -->
+      <div
+        v-if="auth.isTrainer && studentAverages.length"
+        class="student-average-bar"
+      >
+        <span class="student-average-label">Ø pro Lernende/r</span>
+        <span
+          v-for="entry in studentAverages"
+          :key="entry.student"
+          class="student-average-chip"
+          :class="{ 'is-active': Number(filterStudent) === entry.student }"
+        >
+          <span>{{ entry.name }}</span>
+          <strong>Ø {{ entry.average }}</strong>
+          <span class="text-muted">({{ entry.count }})</span>
+        </span>
       </div>
 
       <!-- Collapsible Grades List (Most recent first) -->
@@ -402,3 +441,44 @@ function formatDate(d) {
     </ModalDialog>
   </div>
 </template>
+
+<style scoped>
+.student-average-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+}
+
+.student-average-label {
+  margin-right: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.student-average-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.student-average-chip.is-active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+</style>

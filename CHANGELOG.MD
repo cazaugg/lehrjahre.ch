@@ -17,6 +17,13 @@
 - **Seed data:** Expanded the knowledge base to 4 subjects with 20 pages (Fertigung & Automatisierung, Arbeitssicherheit, Werkstoffkunde, Zeichnen/Messtechnik).
 - **Frontend:** Wissen view now groups pages under their subject instead of listing all entries flat; removed the redundant topic overview block (header already shows title and description).
 - **Frontend:** Replaced the Markdown textarea with `md-editor-v3` (lazy-loaded, German toolbar labels, no external CDN assets). Read-only rendering still uses the existing markdown-it/KaTeX pipeline.
+- **Frontend:** Added a shared `DocumentViewer` for consistent inline document previews and downloads across documents, project submissions and knowledge pages. The document header stays on top and the preview opens below it.
+- **Frontend:** Project participation is now document-based. Students can either write a Markdown document in a full-page editor or upload a file; replaced/removed documents are deleted after saving.
+- **Backend:** Project documents (`type=projekt`) can be created and deleted by their owners and supervising trainers. Documents linked to a released participation are locked until the release is undone.
+- **Lernjournal:** Feedback now records and displays the supervising author. The duplicate “Erstellt von …” line is hidden when it matches the document owner.
+- **Projekte:** Trainer view now lists all assigned learners with a combined submission/evaluation status badge. Expanding a learner shows sections 2 (Durchführung & Abgabe) and 3 (Auswertung & Bewertung) for that learner.
+- **Projekte:** The evaluation view now uses the same expandable learner list. Per-learner evaluation, release and saving happen inside the expanded row; global text and project completion are separate actions.
+- **Lerndokumentation:** Noten & Prüfungen now shows the average per learner between the filter bar and the grade list, respecting the active subject, semester and search filters.
 
 ## 0.1.0 - Initial Implementation
 

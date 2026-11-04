@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
+import DocumentViewer from '../components/ui/DocumentViewer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -324,21 +325,17 @@ async function deleteProject() {
         <div class="form-group" style="margin-bottom: 0">
           <label class="form-label">Projektdokument (optional wenn Text vorhanden)</label>
           <div v-if="documentObj" class="attached-doc">
-            <div class="flex-gap">
-              <strong>📄 {{ documentObj.name }}</strong>
-              <span class="text-muted">({{ documentObj.filename }})</span>
-              <a
-                :href="`/api/documents/${documentObj.id}/file`"
-                target="_blank"
-                rel="noopener"
-                class="btn btn-sm"
-              >
-                Öffnen
-              </a>
-            </div>
-            <button type="button" class="btn btn-sm btn-danger" @click="removeMainDocument">
-              Dokument entfernen
-            </button>
+            <DocumentViewer :document="documentObj">
+              <template #actions>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-danger"
+                  @click="removeMainDocument"
+                >
+                  Dokument entfernen
+                </button>
+              </template>
+            </DocumentViewer>
           </div>
           <div v-else>
             <input type="file" class="form-control" @change="onMainFileChange" />
@@ -488,24 +485,17 @@ async function deleteProject() {
             <div class="form-group" style="margin-bottom: 0">
               <label class="form-label">Aufgabendokument (optional wenn Text vorhanden)</label>
               <div v-if="task.document" class="attached-doc">
-                <div class="flex-gap">
-                  <strong>📄 {{ task.document.name }}</strong>
-                  <a
-                    :href="`/api/documents/${task.document.id}/file`"
-                    target="_blank"
-                    rel="noopener"
-                    class="btn btn-sm"
-                  >
-                    Öffnen
-                  </a>
-                </div>
-                <button
-                  type="button"
-                  class="btn btn-sm btn-danger"
-                  @click="removeTaskDocument(task)"
-                >
-                  Entfernen
-                </button>
+                <DocumentViewer :document="task.document">
+                  <template #actions>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-danger"
+                      @click="removeTaskDocument(task)"
+                    >
+                      Entfernen
+                    </button>
+                  </template>
+                </DocumentViewer>
               </div>
               <div v-else>
                 <input

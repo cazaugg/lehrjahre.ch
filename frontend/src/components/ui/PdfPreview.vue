@@ -44,17 +44,6 @@ watch(
       loading="lazy"
       @load="loaded = true"
     />
-
-    <div class="pdf-actions">
-      <a
-        :href="fileUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="btn btn-sm"
-      >
-        PDF in neuem Tab öffnen
-      </a>
-    </div>
   </div>
 </template>
 
@@ -74,11 +63,5 @@ watch(
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
-}
-
-.pdf-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: var(--space-2);
 }
 </style>

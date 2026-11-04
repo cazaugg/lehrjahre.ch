@@ -455,9 +455,15 @@ class Documents(db.Model):
     )
     is_done = db.Column(db.Boolean, default=False, nullable=False)
     feedback = db.Column(db.Text, default="")
+    feedback_author = db.Column(
+        db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
 
     owner_user = db.relationship("User", foreign_keys=[owner], lazy="joined")
     author_user = db.relationship("User", foreign_keys=[author], lazy="joined")
+    feedback_author_user = db.relationship(
+        "User", foreign_keys=[feedback_author], lazy="joined"
+    )
 
     def to_dict(self):
         return {
@@ -484,6 +490,12 @@ class Documents(db.Model):
             ),
             "is_done": bool(self.is_done),
             "feedback": self.feedback or "",
+            "feedback_author": self.feedback_author,
+            "feedback_author_name": (
+                f"{self.feedback_author_user.name} {self.feedback_author_user.surname}"
+                if self.feedback_author_user
+                else ""
+            ),
         }
 
 
@@ -654,6 +666,11 @@ def ensure_schema_columns():
         ("eval", "is_released", "BOOLEAN NOT NULL DEFAULT 0"),
         ("eval", "eval_released", "BOOLEAN NOT NULL DEFAULT 0"),
         ("documents", "feedback", "TEXT DEFAULT ''"),
+        (
+            "documents",
+            "feedback_author",
+            "INTEGER REFERENCES user(id) ON DELETE SET NULL",
+        ),
     ]
     original_cols = {}
     added_cols = {}

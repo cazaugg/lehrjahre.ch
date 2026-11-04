@@ -572,7 +572,7 @@ def test_lerndokumentation_permissions(client):
 
     # Trainer 1 (assigned supervisor) can write/edit/clear feedback on Lernjournal,
     # but CANNOT edit the entry content or delete the Lernjournal entry
-    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    csrf_t1, trainer1 = login(client, "trainer@vektorwerk.ch")
     assert (
         client.put(
             f"/api/documents/{journal_id}",
@@ -595,6 +595,8 @@ def test_lerndokumentation_permissions(client):
     )
     assert res_fb.status_code == 200
     assert res_fb.get_json()["data"]["feedback"] == "Sehr guter Bericht!"
+    assert res_fb.get_json()["data"]["feedback_author"] == trainer1["id"]
+    assert res_fb.get_json()["data"]["feedback_author_name"] == "Thomas Keller"
 
     # Trainer 1 CAN create Ausbildungsgespräch and delete Zeugnis for Student 1
     res_ag = client.post(
@@ -970,6 +972,142 @@ def test_project_planning_implementation_and_evaluation_workflow(client):
     detail = client.get(f"/api/project/{proj['id']}").get_json()["data"]
     assert detail["global_eval_text"] == "Gutes Gesamtergebnis."
     assert len(detail["evaluations"]) == 3
+
+
+def test_project_submission_markdown_document_lock(client):
+    csrf_tr, trainer = login(client, "trainer@vektorwerk.ch")
+    students = client.get("/api/user?role=lernender").get_json()["data"]["users"]
+    student_id = next(
+        s["id"] for s in students if s["company_email"] == "student@vektorwerk.ch"
+    )
+
+    # Trainers can create project planning documents.
+    res_plan_doc = client.post(
+        "/api/documents",
+        json={
+            "name": "Projektplan: Fräsen",
+            "content": "# Projektplan",
+            "type": "projekt",
+            "owner": trainer["id"],
+            "is_done": True,
+        },
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_plan_doc.status_code == 201
+    plan_doc_id = res_plan_doc.get_json()["data"]["id"]
+
+    res_proj = client.post(
+        "/api/project",
+        json={
+            "title": "Dokumentabgabe",
+            "description": "Projekt mit Dokumentabgabe",
+            "assigned_students": [student_id],
+            "is_published": False,
+        },
+        headers={"X-CSRF-Token": csrf_tr},
+    )
+    assert res_proj.status_code == 201
+    proj_id = res_proj.get_json()["data"]["id"]
+    assert (
+        client.put(
+            f"/api/project/{proj_id}",
+            json={"is_published": True},
+            headers={"X-CSRF-Token": csrf_tr},
+        ).status_code
+        == 200
+    )
+
+    # Students can create their own project submission document.
+    csrf_stu, _ = login(client, "student@vektorwerk.ch")
+    res_doc = client.post(
+        "/api/documents",
+        json={
+            "name": "Abgabe: Dokumentabgabe",
+            "content": "# Bericht\nErste Fassung",
+            "type": "projekt",
+            "owner": student_id,
+            "is_done": True,
+        },
+        headers={"X-CSRF-Token": csrf_stu},
+    )
+    assert res_doc.status_code == 201
+    doc_id = res_doc.get_json()["data"]["id"]
+
+    res_imp = client.post(
+        "/api/implementation",
+        json={
+            "project": proj_id,
+            "title": "Dokumentabgabe",
+            "document_id": doc_id,
+            "is_done": True,
+        },
+        headers={"X-CSRF-Token": csrf_stu},
+    )
+    assert res_imp.status_code == 201
+    imp_id = res_imp.get_json()["data"]["id"]
+
+    # Released project documents are immutable for students and trainers.
+    assert (
+        client.put(
+            f"/api/documents/{doc_id}",
+            json={"content": "# Nachträglich geändert"},
+            headers={"X-CSRF-Token": csrf_stu},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            f"/api/documents/{doc_id}",
+            headers={"X-CSRF-Token": csrf_stu},
+        ).status_code
+        == 403
+    )
+
+    csrf_tr, _ = login(client, "trainer@vektorwerk.ch")
+    assert (
+        client.put(
+            f"/api/documents/{doc_id}",
+            json={"content": "# Trainer ändert"},
+            headers={"X-CSRF-Token": csrf_tr},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            f"/api/documents/{doc_id}",
+            headers={"X-CSRF-Token": csrf_tr},
+        ).status_code
+        == 403
+    )
+
+    # Reopening the submission makes the document editable again.
+    assert (
+        client.put(
+            f"/api/implementation/{imp_id}",
+            json={"is_done": False},
+            headers={"X-CSRF-Token": csrf_tr},
+        ).status_code
+        == 200
+    )
+
+    csrf_stu, _ = login(client, "student@vektorwerk.ch")
+    res_update = client.put(
+        f"/api/documents/{doc_id}",
+        json={"content": "# Bericht\nÜberarbeitet"},
+        headers={"X-CSRF-Token": csrf_stu},
+    )
+    assert res_update.status_code == 200
+    assert "Überarbeitet" in res_update.get_json()["data"]["content"]
+
+    # The trainer's own project planning document can still be deleted.
+    csrf_tr, _ = login(client, "trainer@vektorwerk.ch")
+    assert (
+        client.delete(
+            f"/api/documents/{plan_doc_id}",
+            headers={"X-CSRF-Token": csrf_tr},
+        ).status_code
+        == 200
+    )
 
 
 def test_cross_company_isolation_and_authorless_projects(client):

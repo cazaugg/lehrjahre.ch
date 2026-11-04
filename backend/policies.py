@@ -498,4 +498,9 @@ def can_delete_document(actor: User | None, doc: Documents | None) -> bool:
             return doc.owner == actor.id
         return doc.owner == actor.id or is_supervisor_of(actor, doc.owner)
 
+    if doc.type == "projekt":
+        if is_student(actor):
+            return doc.owner == actor.id
+        return doc.owner == actor.id or is_supervisor_of(actor, doc.owner)
+
     return False
