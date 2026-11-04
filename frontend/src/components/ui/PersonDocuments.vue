@@ -4,6 +4,7 @@ import { apiFetch } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import EditButton from './EditButton.vue'
 import ModalDialog from './ModalDialog.vue'
+import DocumentViewer from './DocumentViewer.vue'
 
 const props = defineProps({
   personId: { type: Number, required: true },
@@ -146,6 +147,7 @@ onMounted(loadDocuments)
         <EditButton
           label="Lehrvertrag / Bewerbung hochladen"
           icon="upload"
+          size="lg"
           variant="primary"
           show-label
           @click="openUpload('vertrag')"
@@ -161,15 +163,15 @@ onMounted(loadDocuments)
         Kein Dokument hinterlegt.
       </div>
       <div v-for="doc in group.docs" :key="doc.id" class="document-row">
-        <div>
-          <a :href="`/api/documents/${doc.id}/file`" target="_blank" rel="noopener">
-            {{ doc.name }}
-          </a>
-          <span v-if="doc.description" class="text-muted"> · {{ doc.description }}</span>
-        </div>
-        <div class="flex-gap">
-          <span class="text-muted">{{ formatDate(doc.updated_date) }}</span>
-          <template v-if="canEdit">
+        <DocumentViewer :document="doc">
+          <template #meta>
+            <span v-if="doc.description">{{ doc.description }}</span>
+            <span class="text-muted">
+              <span v-if="doc.description"> · </span>
+              {{ formatDate(doc.updated_date) }}
+            </span>
+          </template>
+          <template v-if="canEdit" #actions>
             <EditButton
               label="Dokument bearbeiten"
               icon="edit"
@@ -182,7 +184,7 @@ onMounted(loadDocuments)
               @click="deleteDoc(doc)"
             />
           </template>
-        </div>
+        </DocumentViewer>
       </div>
     </div>
 
@@ -247,10 +249,6 @@ onMounted(loadDocuments)
 }
 
 .document-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-3);
   padding: 0.35rem 0;
   border-bottom: 1px solid var(--color-border);
   font-size: 0.9rem;

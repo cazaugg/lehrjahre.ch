@@ -4,9 +4,9 @@ import { apiFetch } from '../../api'
 import { useAuthStore } from '../../stores/auth'
 import ModalDialog from './ModalDialog.vue'
 import MarkdownEditor from './MarkdownEditor.vue'
-import DocxPreview from './DocxPreview.vue'
-import PdfPreview from './PdfPreview.vue'
+import DocumentViewer from './DocumentViewer.vue'
 import EditButton from './EditButton.vue'
+import { getDocumentDownloadUrl } from '../../utils/documents'
 
 const props = defineProps({
   documentType: { type: String, default: '' },
@@ -379,14 +379,6 @@ function formatDate(iso) {
   if (!iso) return '–'
   return new Date(iso).toLocaleDateString('de-CH')
 }
-
-function isDocx(doc) {
-  return (doc.filename || '').toLowerCase().endsWith('.docx')
-}
-
-function isPdf(doc) {
-  return (doc.filename || '').toLowerCase().endsWith('.pdf')
-}
 </script>
 
 <template>
@@ -628,9 +620,10 @@ function isPdf(doc) {
 
             <div class="flex-gap" @click.stop>
               <EditButton
-                label="Datei öffnen"
-                icon="external"
-                :href="`/api/documents/${doc.id}/file`"
+                label="Dokument herunterladen"
+                icon="download"
+                :href="getDocumentDownloadUrl(doc.id)"
+                target="_self"
               />
               <EditButton
                 v-if="doc.type === 'lernjournal' && auth.isTrainer"
@@ -663,88 +656,84 @@ function isPdf(doc) {
           </div>
 
           <div v-if="expandedIds[doc.id]" class="collapsible-body">
-            <div v-if="doc.author_name" class="text-muted" style="margin-bottom: var(--space-2)">
-              Erstellt von {{ doc.author_name }}
-            </div>
-
-            <div v-if="doc.content">
-              <MarkdownEditor :model-value="doc.content" :readonly="true" />
-            </div>
-            <DocxPreview
-              v-else-if="isDocx(doc)"
-              :doc-id="doc.id"
-              :filename="doc.filename"
-              :updated-date="doc.updated_date"
-            />
-            <PdfPreview
-              v-else-if="isPdf(doc)"
-              :doc-id="doc.id"
-              :filename="doc.filename"
-              :updated-date="doc.updated_date"
-            />
-            <div v-else class="text-muted">
-              Binärdatei ({{ doc.filename }}). Klicken Sie oben rechts auf das Öffnen-Symbol, um das Dokument anzusehen.
-            </div>
-
-            <!-- Lernjournal Rückmeldung Section -->
-            <div
-              v-if="doc.type === 'lernjournal'"
-              style="
-                margin-top: var(--space-4);
-                padding-top: var(--space-3);
-                border-top: 1px solid var(--color-border);
-              "
-            >
-              <div class="flex-between" style="margin-bottom: var(--space-2)">
-                <strong>Rückmeldung (Vorgesetzte/r)</strong>
-                <div v-if="auth.isTrainer && editingFeedbackDocId !== doc.id" class="flex-gap">
-                  <EditButton
-                    :label="doc.feedback ? 'Rückmeldung bearbeiten' : 'Rückmeldung erfassen'"
-                    icon="edit"
-                    variant="primary"
-                    show-label
-                    @click="startEditFeedback(doc)"
-                  />
-                  <EditButton
-                    v-if="doc.feedback"
-                    label="Rückmeldung löschen"
-                    icon="delete"
-                    variant="danger"
-                    @click="deleteFeedback(doc)"
-                  />
+            <div class="expanded-doc-layout">
+              <div class="expanded-doc-main">
+                <div
+                  v-if="doc.author_name && doc.author_name !== doc.owner_name"
+                  class="text-muted"
+                  style="margin-bottom: var(--space-2)"
+                >
+                  Erstellt von {{ doc.author_name }}
                 </div>
+
+                <DocumentViewer
+                  :document="doc"
+                  :always-open="true"
+                  :show-header="false"
+                  :show-download="false"
+                />
               </div>
 
-              <form
-                v-if="auth.isTrainer && editingFeedbackDocId === doc.id"
-                @submit.prevent="saveFeedback(doc)"
+              <!-- Lernjournal Rückmeldung Section -->
+              <div
+                v-if="doc.type === 'lernjournal'"
+                class="expanded-doc-side feedback-section"
               >
-                <div class="form-group">
-                  <textarea
-                    v-model="feedbackDraft"
-                    class="form-control"
-                    rows="3"
-                    placeholder="Rückmeldung zum Lernjournal-Eintrag verfassen..."
-                  />
+                <div class="flex-between" style="margin-bottom: var(--space-2)">
+                  <div class="flex-gap">
+                    <strong>Rückmeldung (Vorgesetzte/r)</strong>
+                    <span v-if="doc.feedback_author_name" class="text-muted">
+                      · {{ doc.feedback_author_name }}
+                    </span>
+                  </div>
+                  <div v-if="auth.isTrainer && editingFeedbackDocId !== doc.id" class="flex-gap">
+                    <EditButton
+                      :label="doc.feedback ? 'Rückmeldung bearbeiten' : 'Rückmeldung erfassen'"
+                      icon="edit"
+                      variant="primary"
+                      @click="startEditFeedback(doc)"
+                    />
+                    <EditButton
+                      v-if="doc.feedback"
+                      label="Rückmeldung löschen"
+                      icon="delete"
+                      variant="danger"
+                      @click="deleteFeedback(doc)"
+                    />
+                  </div>
                 </div>
-                <div class="flex-gap">
-                  <button type="submit" class="btn btn-primary btn-sm">
-                    Rückmeldung speichern
-                  </button>
-                  <button type="button" class="btn btn-sm" @click="cancelEditFeedback">
-                    Abbrechen
-                  </button>
-                </div>
-              </form>
-              <p
-                v-else-if="doc.feedback"
-                style="margin: 0; white-space: pre-line"
-              >
-                {{ doc.feedback }}
-              </p>
-              <p v-else class="text-muted" style="margin: 0">
-                Noch keine Rückmeldung vorhanden.
-              </p>
+
+                <form
+                  v-if="auth.isTrainer && editingFeedbackDocId === doc.id"
+                  @submit.prevent="saveFeedback(doc)"
+                >
+                  <div class="form-group">
+                    <textarea
+                      v-model="feedbackDraft"
+                      class="form-control"
+                      rows="3"
+                      placeholder="Rückmeldung zum Lernjournal-Eintrag verfassen..."
+                    />
+                  </div>
+                  <div class="flex-gap">
+                    <button type="submit" class="btn btn-primary btn-sm">
+                      Rückmeldung speichern
+                    </button>
+                    <button type="button" class="btn btn-sm" @click="cancelEditFeedback">
+                      Abbrechen
+                    </button>
+                  </div>
+                </form>
+                <p
+                  v-else-if="doc.feedback"
+                  style="margin: 0; white-space: pre-line"
+                >
+                  {{ doc.feedback }}
+                </p>
+                <p v-else class="text-muted" style="margin: 0">
+                  Noch keine Rückmeldung vorhanden.
+                </p>
+              </div>
             </div>
           </div>
         </div>
@@ -854,5 +843,11 @@ function isPdf(doc) {
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   font-size: 0.85rem;
+}
+
+.feedback-section {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border);
 }
 </style>

@@ -1672,6 +1672,7 @@ def seed_database():
             updated_date=datetime.now(timezone.utc),
             is_done=True,
             feedback="Gute Reflexion zur Passfedernut. Bitte beim nächsten Mal auch die gewählten Schnittdaten (n, vf) festhalten.",
+            feedback_author=admin.id,
         )
 
         gespraech_md = (

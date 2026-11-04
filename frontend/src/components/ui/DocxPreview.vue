@@ -119,15 +119,9 @@ onBeforeUnmount(() => controller?.abort())
 
     <div v-else-if="error" class="alert alert-error">
       {{ error }}
-      <a
-        :href="fileUrl"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="btn btn-sm"
-        style="margin-left: var(--space-3)"
-      >
-        Datei öffnen
-      </a>
+      <span style="margin-left: var(--space-3)">
+        Bitte verwenden Sie die Download-Schaltfläche.
+      </span>
     </div>
 
     <div

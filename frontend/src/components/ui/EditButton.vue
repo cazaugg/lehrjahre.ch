@@ -2,7 +2,7 @@
 defineProps({
   label: { type: String, required: true },
   icon: { type: String, default: 'edit' },
-  // 'edit' | 'delete' | 'check' | 'undo' | 'plus' | 'folder-plus' | 'file-plus' | 'user-plus' | 'upload' | 'external' | 'copy' | 'image' | 'link' | 'close'
+  // 'edit' | 'delete' | 'check' | 'undo' | 'plus' | 'folder-plus' | 'file-plus' | 'user-plus' | 'upload' | 'download' | 'external' | 'copy' | 'image' | 'link' | 'eye' | 'close'
   variant: { type: String, default: 'default' }, // 'default' | 'primary' | 'danger' | 'success'
   size: { type: String, default: 'sm' }, // 'sm' | 'lg'
   showLabel: { type: Boolean, default: false },
@@ -31,8 +31,27 @@ defineEmits(['click'])
     :aria-label="label"
     @click.stop
   >
+    <!-- Download -->
+    <svg
+      v-if="icon === 'download'"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+
     <!-- External / Open File -->
     <svg
+      v-else
       viewBox="0 0 24 24"
       width="15"
       height="15"
@@ -276,6 +295,41 @@ defineEmits(['click'])
     >
       <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+
+    <!-- Download -->
+    <svg
+      v-else-if="icon === 'download'"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+
+    <!-- Preview / Eye -->
+    <svg
+      v-else-if="icon === 'eye'"
+      viewBox="0 0 24 24"
+      width="15"
+      height="15"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
     </svg>
 
     <!-- Close / Dismiss -->

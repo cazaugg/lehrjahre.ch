@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, send_file
-from backend.models import db, Documents, User
+from backend.models import db, Documents, Participation, User
 from backend.auth import login_required, get_current_user, can_access_student
 from backend.policies import (
     is_supervisor,
@@ -36,6 +36,16 @@ VALID_TYPES = {
     "projekt",
     "sonstiges",
 }
+
+
+def project_document_is_released(doc):
+    """A project document linked to a released participation is immutable."""
+    if not doc or doc.type != "projekt":
+        return False
+    return (
+        Participation.query.filter_by(document_id=doc.id, is_done=True).first()
+        is not None
+    )
 
 
 @bp.route("", methods=["GET"])
@@ -205,6 +215,9 @@ def create_document():
         updated_date=datetime.now(timezone.utc),
         is_done=is_done,
         feedback=feedback if is_supervisor(actor) else "",
+        feedback_author=(
+            actor.id if is_supervisor(actor) and feedback else None
+        ),
     )
     db.session.add(doc)
     db.session.commit()
@@ -229,6 +242,13 @@ def update_document(doc_id):
     doc = db.session.get(Documents, doc_id)
     if not doc or not can_view_document(actor, doc):
         return jsonify({"error": "Dokument nicht gefunden."}), 404
+
+    if project_document_is_released(doc):
+        return jsonify(
+            {
+                "error": "Abgegebene Projektdokumente können nicht mehr geändert werden. Bitte zuerst die Freigabe rückgängig machen."
+            }
+        ), 403
 
     data = request.get_json(silent=True) or {}
 
@@ -288,6 +308,7 @@ def update_document(doc_id):
                     }
                 ), 403
             doc.feedback = parse_str(data.get("feedback"), "Rückmeldung")
+            doc.feedback_author = actor.id if doc.feedback else None
             doc.updated_date = datetime.now(timezone.utc)
             db.session.commit()
             audit(
@@ -333,6 +354,7 @@ def update_document(doc_id):
         doc.is_template = new_template
     if is_supervisor(actor) and "feedback" in data:
         doc.feedback = parse_str(data.get("feedback"), "Rückmeldung")
+        doc.feedback_author = actor.id if doc.feedback else None
 
     if "content" in data and data.get("content") is not None:
         content = parse_str(data.get("content"), "Inhalt", allow_none=True)
@@ -369,6 +391,13 @@ def delete_document(doc_id):
 
     if not can_delete_document(actor, doc):
         return jsonify({"error": "Keine Berechtigung zum Löschen."}), 403
+
+    if project_document_is_released(doc):
+        return jsonify(
+            {
+                "error": "Abgegebene Projektdokumente können nicht mehr gelöscht werden. Bitte zuerst die Freigabe rückgängig machen."
+            }
+        ), 403
 
     rel_path = doc.path
     owner_id = doc.owner
