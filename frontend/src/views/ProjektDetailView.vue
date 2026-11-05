@@ -7,6 +7,7 @@ import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
 import DocumentViewer from '../components/ui/DocumentViewer.vue'
 import ProjectStudentList from '../components/ui/ProjectStudentList.vue'
 import ProjectStudentReview from '../components/ui/ProjectStudentReview.vue'
+import LernzielLabel from '../components/ui/LernzielLabel.vue'
 import { isMarkdownEditable } from '../utils/documents'
 
 const route = useRoute()
@@ -598,8 +599,8 @@ function formatDate(d) {
         <div v-if="(project.goals || []).length > 0" class="detail-item">
           <div class="detail-label">Zugewiesene Ziele</div>
           <ul class="clean-list">
-            <li v-for="(g, idx) in project.goals" :key="idx">
-              🎯 {{ g }}
+            <li v-for="(g, idx) in project.goals" :key="idx" class="goal-line">
+              🎯 <LernzielLabel :goal="g" />
             </li>
           </ul>
         </div>
@@ -946,7 +947,7 @@ function formatDate(d) {
                 :key="'eval-goal-' + idx"
                 class="task-overview-item"
               >
-                <strong>🎯 {{ g }}</strong>
+                <strong>🎯 <LernzielLabel :goal="g" /></strong>
                 <p
                   style="white-space: pre-line; margin: 6px 0 0 0"
                   :class="{ 'text-muted': !goalEvalFor(g)?.eval_text }"

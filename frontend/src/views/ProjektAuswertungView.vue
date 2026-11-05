@@ -5,6 +5,7 @@ import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import DocumentViewer from '../components/ui/DocumentViewer.vue'
 import ProjectStudentList from '../components/ui/ProjectStudentList.vue'
+import LernzielLabel from '../components/ui/LernzielLabel.vue'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -464,7 +465,7 @@ async function saveGlobalEvaluation(markCompleted = false) {
                 class="sub-eval-item"
               >
                 <div class="form-group" style="margin-bottom: 0">
-                  <label class="form-label">🎯 {{ ge.goal }}</label>
+                  <label class="form-label">🎯 <LernzielLabel :goal="ge.goal" /></label>
                   <textarea
                     v-model="ge.eval_text"
                     class="form-control"

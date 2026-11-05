@@ -3110,3 +3110,13 @@ def test_lehrplan_requires_login_and_delivers_static_data(client):
 
     # Unknown job codes yield a 404.
     assert client.get("/api/lehrplan/XX").status_code == 404
+
+    # Lernziel lookup resolves IDs against every job tree (display helper).
+    res_lz = client.get("/api/lehrplan/lz/LZ_6957")
+    assert res_lz.status_code == 200
+    lz = res_lz.get_json()["data"]
+    assert lz["lz_id"] == "LZ_6957"
+    assert lz["description"]
+    assert lz["code"] in {"AA", "KR", "MP", "PR", "PM", "AM", "AU", "ET"}
+    assert lz["lk_id"]
+    assert client.get("/api/lehrplan/lz/LZ_nothing").status_code == 404

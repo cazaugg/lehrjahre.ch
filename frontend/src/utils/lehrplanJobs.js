@@ -28,3 +28,29 @@ export function fetchLehrplanJobs() {
   }
   return jobsPromise
 }
+
+/**
+ * Mappt einen user.job_title (Config-Form, z. B. «Polymechanikerin /
+ * Polymechaniker EFZ») auf das Lehrplan-Kürzel («PM»). Gibt null zurück,
+ * wenn keine Übereinstimmung gefunden wird.
+ */
+export function jobCodeForProfession(jobTitle) {
+  if (!jobTitle) return null
+  const norm = String(jobTitle)
+    .toLowerCase()
+    .replace(/\s*(efz|eba)\s*$/, '')
+    .replace(/in\s*\//g, '/')
+  for (const job of fallbackJobs) {
+    const base = String(job.name)
+      .toLowerCase()
+      .replace(/\s*(efz|eba)\s*$/, '')
+    const parts = base.split('/').map((p) => p.trim()).filter(Boolean)
+    const re = new RegExp(`(^|[^\\p{L}])(${parts.map(escapeRegex).join('|')})([^\\p{L}]|$)`, 'u')
+    if (re.test(norm)) return job.code
+  }
+  return null
+}
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}

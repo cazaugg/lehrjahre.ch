@@ -57,6 +57,36 @@ def list_lehrplan_jobs():
     return jsonify({"data": result})
 
 
+@bp.route("/lz/<string:lz_id>", methods=["GET"])
+@login_required
+def lookup_lernziel(lz_id):
+    """Resolve a Lernziel ID against the static lehrplan data (display helper)."""
+    jobs = _load_jobs()
+    for code in jobs:
+        tree = _load_lehrplan(code)
+        if not tree or code not in tree:
+            continue
+        for hkb in tree[code].get("handlungskompetenzbereiche") or []:
+            for hk in hkb.get("handlungskompetenzen") or []:
+                for lk in hk.get("lernkriterien") or []:
+                    for lz in lk.get("lernziele") or []:
+                        if str(lz.get("ID LZ")) == lz_id:
+                            return jsonify(
+                                {
+                                    "data": {
+                                        "code": code,
+                                        "job_name": jobs[code].get("name"),
+                                        "lz_id": lz_id,
+                                        "description": lz.get("Beschreibung LZ"),
+                                        "lk_id": lk.get("ID LK"),
+                                        "lernort": lk.get("Lernort"),
+                                        "semesters": lz.get("Semester"),
+                                    }
+                                }
+                            )
+    return jsonify({"error": "Lernziel nicht gefunden."}), 404
+
+
 @bp.route("/<string:code>", methods=["GET"])
 @login_required
 def get_lehrplan(code):

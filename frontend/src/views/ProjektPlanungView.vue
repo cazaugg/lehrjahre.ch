@@ -5,6 +5,9 @@ import { apiFetch } from '../api'
 import { useAuthStore } from '../stores/auth'
 import MarkdownEditor from '../components/ui/MarkdownEditor.vue'
 import DocumentViewer from '../components/ui/DocumentViewer.vue'
+import LehrplanGoalPicker from '../components/ui/LehrplanGoalPicker.vue'
+import LernzielLabel from '../components/ui/LernzielLabel.vue'
+import { jobCodeForProfession } from '../utils/lehrplanJobs'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,6 +31,19 @@ const pendingFile = ref(null)
 const assignedStudents = ref([])
 const goals = ref([])
 const newGoalText = ref('')
+const showGoalPicker = ref(false)
+
+// Vorauswahl für den Lernziel-Picker: Job der ersten zugewiesenen Lernenden
+// mit erkanntem Beruf (alle Berufe bleiben im Picker wählbar).
+const defaultGoalJobCode = computed(() => {
+  for (const stu of assignedStudents.value) {
+    const stuObj =
+      auth.companyStudents.find((s) => s.id === stu) || null
+    const code = jobCodeForProfession(stuObj?.job_title)
+    if (code) return code
+  }
+  return ''
+})
 const tasks = ref([])
 const isPublished = ref(false)
 
@@ -74,6 +90,19 @@ function addGoal() {
     goals.value.push(g)
   }
   newGoalText.value = ''
+}
+
+/**
+ * Übernahme aus dem Lernziel-Picker: es wird nur die LZ-ID (z. B. «LZ_6957»)
+ * als String gespeichert — identisch zum bisherigen Schema, dedupliziert mit
+ * derselben includes-Logik wie beim Freitext.
+ */
+function applyPickedGoals(picked) {
+  for (const item of picked || []) {
+    if (item?.id && !goals.value.includes(item.id)) {
+      goals.value.push(item.id)
+    }
+  }
 }
 
 function removeGoal(idx) {
@@ -388,7 +417,10 @@ async function deleteProject() {
               placeholder="Neues Lernziel eingeben..."
               @keydown.enter.prevent="addGoal"
             />
-            <button type="button" class="btn" @click="addGoal">+ Hinzufügen</button>
+            <button type="button" class="btn" @click="showGoalPicker = true">
+              + Lernziel aus Lehrplan wählen
+            </button>
+            <button type="button" class="btn btn-primary" @click="addGoal">+ Hinzufügen</button>
           </div>
 
           <div v-if="goals.length === 0" class="text-muted">
@@ -396,7 +428,13 @@ async function deleteProject() {
           </div>
           <div v-else class="goal-edit-list">
             <div v-for="(g, idx) in goals" :key="idx" class="goal-edit-row">
+              <template v-if="/^\s*LZ_\d+\s*$/.test(g)">
+                <div class="goal-id-display">
+                  <LernzielLabel :goal="g" />
+                </div>
+              </template>
               <input
+                v-else
                 v-model="goals[idx]"
                 type="text"
                 class="form-control"
@@ -414,6 +452,13 @@ async function deleteProject() {
         </div>
       </div>
 
+    <LehrplanGoalPicker
+      :show="showGoalPicker"
+      :default-job-code="defaultGoalJobCode"
+      :existing="goals"
+      @close="showGoalPicker = false"
+      @confirm="applyPickedGoals"
+    />
       <!-- 5. (Sub-)Aufgaben zuweisen -->
       <div class="card">
         <div class="card-header">
@@ -579,6 +624,14 @@ async function deleteProject() {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+.goal-id-display {
+  flex: 1;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  padding: 0.35rem 0.6rem;
 }
 
 .task-list {
