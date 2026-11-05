@@ -30,6 +30,11 @@ const navItems = [
     label: 'Wissen & Notizen'
   },
   {
+    to: '/vorlagen',
+    prefix: '/vorlagen',
+    label: 'Vorlagen'
+  },
+  {
     to: '/personen',
     prefix: '/personen',
     label: 'Personen'

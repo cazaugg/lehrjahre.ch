@@ -2587,6 +2587,47 @@ def test_template_conversion_requires_document_ownership(client):
     assert res.get_json()["data"]["is_template"] is False
 
 
+def test_template_listing_lists_all_types_company_wide(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+
+    created = []
+    for name, doc_type in [("Vorlage Gespräch", "ausbildungsgespraech"), ("Vorlage Bericht", "sonstiges")]:
+        res = client.post(
+            "/api/documents",
+            json={
+                "name": name,
+                "type": doc_type,
+                "content": f"Inhalt {name}",
+                "is_template": True,
+            },
+            headers={"X-CSRF-Token": csrf_t1},
+        )
+        assert res.status_code == 201
+        created.append(res.get_json()["data"]["id"])
+
+    # A non-template document of the same company must not appear.
+    res = client.post(
+        "/api/documents",
+        json={"name": "Normales Dokument", "type": "sonstiges", "content": "Inhalt"},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    normal_doc_id = res.get_json()["data"]["id"]
+
+    # Learners see all company templates across every document type.
+    csrf_s1, _ = login(client, "student@vektorwerk.ch")
+    listed = client.get(
+        "/api/documents?is_template=true&include_content=true"
+    ).get_json()["data"]
+    listed_ids = {d["id"] for d in listed}
+    assert created[0] in listed_ids
+    assert created[1] in listed_ids
+    assert normal_doc_id not in listed_ids
+    assert all(d["is_template"] for d in listed)
+    first = next(d for d in listed if d["id"] == created[0])
+    assert first["content"]
+
+
 def test_document_references_are_validated(client):
     csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
     users = {
@@ -2898,3 +2939,48 @@ def test_deleting_user_removes_document_files(client):
     )
     assert res.status_code == 200
     assert not os.path.isfile(abs_path)
+
+
+def test_seed_creates_official_templates(tmp_path, monkeypatch):
+    from backend import seed as seed_module
+    from backend.app import create_app
+    from backend.storage import read_text_document
+
+    real_create_app = create_app
+
+    config = {
+        "TESTING": True,
+        "DEBUG": False,
+        "IS_DEV": True,
+        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path}/seed.db",
+        "DOCUMENTS_ROOT": str(tmp_path / "seed_documents"),
+        "SECRET_KEY": "seed-test-secret-key" * 5,
+    }
+
+    def configured_create_app(overrides=None):
+        return real_create_app({**config, **(overrides or {})})
+
+    monkeypatch.setattr(seed_module, "create_app", configured_create_app)
+    seed_module.seed_database()
+
+    app = configured_create_app()
+    with app.app_context():
+        templates = Documents.query.filter_by(is_template=True).all()
+        names = {d.name for d in templates}
+        # Templates are neutral about the profession (no Handlungskompetenz refs).
+        contents = {d.name: read_text_document(d.path) for d in templates}
+    assert names == {
+        "Vorlage Bildungsbericht",
+        "Vorlage Lernjournal-Eintrag",
+        "Vorlage Projektplanung",
+        "Vorlage Projektdurchführung",
+    }
+    assert {d.type for d in templates} == {
+        "ausbildungsgespraech",
+        "lernjournal",
+        "projekt",
+    }
+    # Templates are neutral about the profession (no Handlungskompetenz refs).
+    for tpl_name, content in contents.items():
+        assert content.strip(), f"Empty template content: {tpl_name}"
+        assert "Handlungskompetenz" not in content
