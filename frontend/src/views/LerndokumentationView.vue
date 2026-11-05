@@ -358,7 +358,6 @@ function formatDate(d) {
         title="Ausbildungsgespräche & Probezeitgespräch"
         subtitle="Halbjährliche Bildungsberichte, Probezeitprotokolle und Zielvereinbarungen"
         :prefer-text-editor="true"
-        :allow-templates="false"
       />
     </div>
 

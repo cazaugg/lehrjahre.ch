@@ -47,6 +47,11 @@ const baseNavItems = [
     label: 'Lehrplan'
   },
   {
+    to: '/vorlagen',
+    prefix: '/vorlagen',
+    label: 'Vorlagen'
+  },
+  {
     to: '/personen',
     prefix: '/personen',
     label: 'Personen'

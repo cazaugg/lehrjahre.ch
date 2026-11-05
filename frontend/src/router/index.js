@@ -7,6 +7,7 @@ import ProjektPlanungView from '../views/ProjektPlanungView.vue'
 import ProjektAuswertungView from '../views/ProjektAuswertungView.vue'
 import LerndokumentationView from '../views/LerndokumentationView.vue'
 import WissenView from '../views/WissenView.vue'
+import VorlagenView from '../views/VorlagenView.vue'
 import LehrplanJobView from '../views/LehrplanJobView.vue'
 import PersonenView from '../views/PersonenView.vue'
 import AccountView from '../views/AccountView.vue'
@@ -59,6 +60,7 @@ const routes = [
     name: 'lehrplan',
     component: LehrplanJobView
   },
+  { path: '/vorlagen', name: 'vorlagen', component: VorlagenView },
   { path: '/personen', name: 'personen', component: PersonenView },
   { path: '/personen/:section', redirect: '/personen' },
   { path: '/account', name: 'account', component: AccountView },

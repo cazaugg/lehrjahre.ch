@@ -1704,40 +1704,179 @@ def seed_database():
             is_done=True,
         )
 
-        tpl_gespraech_md = (
-            "# Vorlage: Halbjahres-Ausbildungsgespräch (Bildungsbericht)\n\n"
-            "**Lernende/r:**  \n"
-            "**Berufsbildner/in:**  \n"
-            "**Semester:**  \n\n"
-            "## 1. Rückblick auf das vergangene Semester\n"
-            "- Was ist besonders gut gelungen?\n"
-            "- Wo gab es Herausforderungen?\n\n"
-            "## 2. Beurteilung der Kompetenzen (A–D)\n"
-            "- **Fachkompetenz:** \n"
-            "- **Methodenkompetenz:** \n"
-            "- **Sozial- und Selbstkompetenz:** \n\n"
-            "## 3. Schulische Leistungen & ÜK\n"
-            "- Berufsfachschule / BM:\n"
-            "- Überbetriebliche Kurse:\n\n"
-            "## 4. Ziele für das nächste Semester\n"
-            "1. \n"
-            "2. \n"
-        )
-        t_fn, t_path = save_text_document(
-            tpl_gespraech_md, "Vorlage_Ausbildungsgespraech", company.name
-        )
-        doc_tpl = Documents(
-            name="Vorlage Bildungsbericht / Ausbildungsgespräch",
-            description="Offizielle Vorlage für Semester- und Probezeitgespräche",
-            filename=t_fn,
-            path=t_path,
-            type="ausbildungsgespraech",
-            owner=admin.id,
-            author=admin.id,
-            is_template=True,
-            updated_date=datetime.now(timezone.utc),
-            is_done=True,
-        )
+        # Seed templates for the new "Vorlagen" section. Structure follows the
+        # SBFI Bildungsplan 46427 (Automatikmonteur/in EFZ, ab Lehrbeginn 2026):
+        # Lerndokumentation (Art. 12), Bildungsbericht (Art. 13) und die
+        # Qualifikationsbereiche Planen / Durchfuehren / Auswerten (Art. 18 QV).
+        seed_templates = [
+            {
+                "name": "Vorlage Bildungsbericht",
+                "description": "Semesterweiser Bildungsbericht mit Rückmeldungen aus allen Lernorten und vereinbarten Massnahmen (Art. 13 BiVo)",
+                "filename": "Vorlage_Bildungsbericht",
+                "type": "ausbildungsgespraech",
+                "content": (
+                    "# Bildungsbericht\n\n"
+                    "**Lernende/r:**  \n"
+                    "**Berufsbildner/in:**  \n"
+                    "**Semester:**  \n"
+                    "**Datum:**  \n\n"
+                    "## 1. Rückmeldungen aus den Lernorten\n"
+                    "### 1.1 Ausbildung im Lehrbetrieb\n"
+                    "- Verlauf und ausgeführte Arbeiten:  \n"
+                    "- Was ist besonders gut gelungen?  \n"
+                    "- Wo gab es Herausforderungen?  \n\n"
+                    "### 1.2 Berufsfachschule\n"
+                    "- Leistungen / Noten:  \n"
+                    "- Absenzen / Bemerkungen:  \n\n"
+                    "### 1.3 Überbetriebliche Kurse (üK)\n"
+                    "- Kurs(e) / Kompetenznachweise:  \n"
+                    "- Verlauf und Bemerkungen:  \n\n"
+                    "## 2. Entwicklungsstand in den Tätigkeitsbereichen\n"
+                    "| Tätigkeitsbereich | Entwicklungsstand | Bemerkungen |\n"
+                    "| --- | --- | --- |\n"
+                    "|  | erreicht / in Entwicklung / nicht erreicht |  |\n"
+                    "|  | erreicht / in Entwicklung / nicht erreicht |  |\n\n"
+                    "## 3. Vereinbarte Massnahmen\n"
+                    "| Massnahme | Ziel | Frist | Verantwortlich |\n"
+                    "| --- | --- | --- | --- |\n"
+                    "|  |  |  |  |\n\n"
+                    "### Überprüfung der Massnahmen aus dem vorigen Bericht\n"
+                    "- Umsetzung und Wirkung:  \n\n"
+                    "## 4. Beschluss\n"
+                    "Der Bildungsbericht wurde mit der lernenden Person besprochen.\n\n"
+                    "| Lernende/r | Berufsbildner/in | Datum |\n"
+                    "| --- | --- | --- |\n"
+                    "|  |  |  |"
+                ),
+            },
+            {
+                "name": "Vorlage Lernjournal-Eintrag",
+                "description": "Laufende Lerndokumentation mit ausgeführten Arbeiten, Sicherheitsthemen und Reflexion (Art. 12 BiVo)",
+                "filename": "Vorlage_Lernjournal",
+                "type": "lernjournal",
+                "content": (
+                    "# Lernjournal-Eintrag\n\n"
+                    "**Datum:**  \n"
+                    "**Dauer:**  \n"
+                    "**Arbeitsort / Auftraggeber:**  \n\n"
+                    "## 1. Ausgeführte Arbeiten\n"
+                    "1.  \n"
+                    "2.  \n\n"
+                    "## 2. Eingesetzte Werkzeuge, Maschinen und Hilfsmittel\n"
+                    "-  \n\n"
+                    "## 3. Sicherheit und Prävention\n"
+                    "- Angewandte Schutzmassnahmen:  \n"
+                    "- Präventionsthema des Tages:  \n"
+                    "- Beobachtungen / Auffälligkeiten:  \n\n"
+                    "## 4. Reflexion\n"
+                    "- Was ist gut gelungen?  \n"
+                    "- Was war herausfordernd?  \n"
+                    "- Was nehme ich mir vor?  \n\n"
+                    "## 5. Besprechung mit der Berufsbildnerin / dem Berufsbildner\n"
+                    "- [ ] Eintrag besprochen und kontrolliert\n"
+                    "- Signum / Datum:  "
+                ),
+            },
+            {
+                "name": "Vorlage Projektplanung",
+                "description": "Auftragsplanung mit Anforderungen, Zeitplan, Ressourcen und Freigabevermerk",
+                "filename": "Vorlage_Projektplanung",
+                "type": "projekt",
+                "content": (
+                    "# Projektplanung\n\n"
+                    "**Projekts-Titel:**  \n"
+                    "**Kunde / Auslöser des Auftrags:**  \n"
+                    "**Projektzeitraum:**  \n"
+                    "**Team / Beteiligte:**  \n\n"
+                    "## 1. Auftrag und Anforderungen\n"
+                    "### 1.1 Ausgangslage\n"
+                    "Beschreibung der Ausgangslage und des Auftrags...  \n\n"
+                    "### 1.2 Anforderungsliste\n"
+                    "| Nr. | Anforderung | Priorität | Bemerkungen |\n"
+                    "| --- | --- | --- | --- |\n"
+                    "| 1 |  |  |  |\n\n"
+                    "### 1.3 Rahmenbedingungen und Abgrenzungen\n"
+                    "-  \n\n"
+                    "## 2. Zeitplan\n"
+                    "| Nr. | Arbeitsphase | Start | Ende | Status (geplant) |\n"
+                    "| --- | --- | --- | --- | --- |\n"
+                    "| 1 |  |  |  |  |\n\n"
+                    "**Meilensteine:**  \n"
+                    "-  \n\n"
+                    "## 3. Ressourcen und Betriebsmittel\n"
+                    "- Materialien (Zukauf / Eigenfertigung):  \n"
+                    "- Maschinen und Werkzeuge:  \n"
+                    "- Mitarbeitende / Fremdunternehmen:  \n"
+                    "- Rahmenbudget (optional):  \n\n"
+                    "## 4. Risiken (optional)\n"
+                    "| Risiko | Massnahme zur Gegenmassnahme |\n"
+                    "| --- | --- |\n"
+                    "|  |  |\n\n"
+                    "## 5. Freigabe der Planung\n"
+                    "- [ ] Planung wurde von Auftraggeber/in bzw. Vorgesetzte/n geprüft und freigegeben\n"
+                    "- Bemerkungen:  \n\n"
+                    "| Freigabe durch | Datum |\n"
+                    "| --- | --- |\n"
+                    "|  |  |"
+                ),
+            },
+            {
+                "name": "Vorlage Projektdurchführung",
+                "description": "Laufende Fortschrittsberichte mit Abweichungen, Änderungen, Qualitätskontrollen und Abschlussauswertung",
+                "filename": "Vorlage_Projektdurchfuehrung",
+                "type": "projekt",
+                "content": (
+                    "# Projektdurchführung\n\n"
+                    "**Projekt:**  \n"
+                    "**Zeitraum:**  \n"
+                    "**Verfasser/in:**  \n\n"
+                    "## 1. Verlaufsberichte\n"
+                    "### Bericht KW ___ / Datum ___\n"
+                    "- Fortschritt gegenüber Meilensteinen:  \n"
+                    "- Ausgeführte Tätigkeiten:  \n"
+                    "- Abweichungen und Massnahmen:  \n\n"
+                    "### Bericht KW ___ / Datum ___\n"
+                    "- Fortschritt gegenüber Meilensteinen:  \n"
+                    "- Ausgeführte Tätigkeiten:  \n"
+                    "- Abweichungen und Massnahmen:  \n\n"
+                    "## 2. Änderungen\n"
+                    "| Nr. | Änderung | Grund | Auswirkung (Zeit/Kosten) | Datum |\n"
+                    "| --- | --- | --- | --- | --- |\n"
+                    "| 1 |  |  |  |  |\n\n"
+                    "## 3. Qualitätskontrolle und Prüfungen\n"
+                    "| Prüffeld / Prüfmittel | Kriterium | Soll / Ist | Resultat | Nacharbeit |\n"
+                    "| --- | --- | --- | --- | --- |\n"
+                    "|  |  |  |  |  |\n\n"
+                    "## 4. Abschluss und Auswertung\n"
+                    "### 4.1 Zielerreichung\n"
+                    "| Ziel | Erfüllt? | Anmerkung |\n"
+                    "| --- | --- | --- |\n"
+                    "|  | ja / teilweise / nein |  |\n\n"
+                    "### 4.2 Ökologie und Ökonomie\n"
+                    "- Ressourcen- und Energieeffizienz:  \n"
+                    "- Kostenblick (Budget vs. effektiv):  \n\n"
+                    "### 4.3 Reflexion und Erkenntnisse für künftige Projekte\n"
+                    "-  "
+                ),
+            },
+        ]
+        for tpl in seed_templates:
+            fn, path = save_text_document(tpl["content"], tpl["filename"], company.name)
+            doc = Documents(
+                name=tpl["name"],
+                description=tpl["description"],
+                filename=fn,
+                path=path,
+                type=tpl["type"],
+                owner=admin.id,
+                author=admin.id,
+                is_template=True,
+                updated_date=datetime.now(timezone.utc),
+                is_done=True,
+            )
+            db.session.add(doc)
+        db.session.flush()
+
 
         vertrag_md = (
             "# Lehrvertrag MEM-Berufe (Auszug)\n\n"
@@ -1797,7 +1936,7 @@ def seed_database():
         )
 
         db.session.add_all(
-            [doc_journal, doc_gespraech, doc_tpl, doc_vertrag, doc_word, doc_pdf]
+            [doc_journal, doc_gespraech, doc_vertrag, doc_word, doc_pdf]
         )
         db.session.flush()
 

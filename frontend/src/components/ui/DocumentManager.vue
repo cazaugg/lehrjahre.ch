@@ -168,7 +168,39 @@ const formIsDone = ref(false)
 const formIsTemplate = ref(false)
 const selectedFile = ref(null)
 
-const templates = computed(() => documents.value.filter((d) => d.is_template))
+const templatesLoading = ref(false)
+const showTemplatePicker = ref(false)
+const allTemplates = ref([])
+
+// Templates usable in the current document-type context
+const availableTemplates = computed(() => {
+  const activeTypes = types.value
+  return allTemplates.value.filter(
+    (tpl) => activeTypes.length === 0 || activeTypes.includes(tpl.type)
+  )
+})
+
+async function openTemplatePicker() {
+  error.value = ''
+  showTemplatePicker.value = true
+  templatesLoading.value = true
+  try {
+    allTemplates.value = await apiFetch(
+      '/api/documents?is_template=true&include_content=true'
+    )
+  } catch (e) {
+    error.value = e.message
+    showTemplatePicker.value = false
+  } finally {
+    templatesLoading.value = false
+  }
+}
+
+function useTemplate(tpl) {
+  showTemplatePicker.value = false
+  openCreate('text', tpl)
+}
+
 
 const filteredDocs = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -504,43 +536,18 @@ function formatDate(iso) {
             :variant="preferTextEditor ? 'primary' : 'default'"
             @click="openCreate('text')"
           />
+          <EditButton
+            v-if="allowTemplates"
+            size="lg"
+            show-label
+            label="Vorlage laden"
+            icon="copy"
+            @click="openTemplatePicker"
+          />
         </div>
       </div>
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>
-
-      <!-- Templates Banner -->
-      <div
-        v-if="allowTemplates && templates.length > 0"
-        class="card"
-        style="background: var(--color-surface-muted)"
-      >
-        <div class="flex-between">
-          <strong>Verfügbare Vorlagen</strong>
-          <span class="text-muted">Direkt als neues Dokument übernehmen</span>
-        </div>
-        <div class="flex-gap" style="margin-top: var(--space-2)">
-          <div v-for="tpl in templates" :key="tpl.id" class="template-pill">
-            <span>{{ tpl.name }}</span>
-            <span v-if="hasMultipleTypes" class="badge badge-type">
-              {{ typeLabel(tpl.type) }}
-            </span>
-            <EditButton
-              v-if="canCreate"
-              label="Vorlage verwenden"
-              icon="copy"
-              variant="primary"
-              @click="openCreate('text', tpl)"
-            />
-            <EditButton
-              v-if="auth.isTrainer"
-              label="Vorlage bearbeiten"
-              icon="edit"
-              @click="openEdit(tpl)"
-            />
-          </div>
-        </div>
-      </div>
 
       <!-- Search & Filter Bar -->
       <div class="filter-bar">
@@ -824,6 +831,41 @@ function formatDate(iso) {
           </div>
         </form>
       </ModalDialog>
+
+      <!-- Template Picker Modal -->
+      <ModalDialog
+        :show="showTemplatePicker"
+        title="Vorlage laden"
+        width="640px"
+        @close="showTemplatePicker = false"
+      >
+        <div v-if="templatesLoading" class="card">Lade Vorlagen...</div>
+        <div v-else-if="availableTemplates.length === 0" class="card empty-state">
+          Keine passenden Vorlagen vorhanden. Vorlagen werden in der Sektion
+          «Vorlagen» erstellt und gelten firmenweit.
+        </div>
+        <div v-else class="template-list">
+          <div
+            v-for="tpl in availableTemplates"
+            :key="tpl.id"
+            class="template-item"
+          >
+            <div>
+              <strong>{{ tpl.name }}</strong>
+              <div class="text-muted" style="margin-top: 2px">
+                <span class="badge badge-type">{{ typeLabel(tpl.type) }}</span>
+                {{ tpl.description || 'Vorlage als Markdown-Dokument übernehmen' }}
+              </div>
+            </div>
+            <EditButton
+              label="Vorlage verwenden"
+              icon="copy"
+              variant="primary"
+              @click="useTemplate(tpl)"
+            />
+          </div>
+        </div>
+      </ModalDialog>
     </div>
   </div>
 </template>
@@ -834,15 +876,22 @@ function formatDate(iso) {
   color: var(--color-primary);
 }
 
-.template-pill {
-  display: inline-flex;
-  align-items: center;
+.template-list {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
-  padding: 0.4rem 0.75rem;
-  background: var(--color-surface);
+}
+
+.template-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0.6rem 0.75rem;
+  background: var(--color-surface-muted);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
-  font-size: 0.85rem;
+  font-size: 0.9rem;
 }
 
 .feedback-section {
