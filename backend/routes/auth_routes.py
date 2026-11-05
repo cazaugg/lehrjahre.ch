@@ -52,6 +52,15 @@ def login():
             response.headers["Retry-After"] = str(max(1, int(retry_after)))
             return response
 
+    company_hint = parse_str(
+        data.get("company_domain", data.get("company_email_domain")),
+        "Firmendomain",
+        default="",
+        allow_none=True,
+    )
+    if company_hint:
+        company_hint = company_hint.strip().lower().lstrip("@")
+
     matches = User.query.filter(
         or_(
             func.lower(User.company_email) == email,
@@ -59,6 +68,15 @@ def login():
             func.lower(User.school_email) == email,
         )
     ).all()
+    if company_hint:
+        from backend.models import Company
+
+        matches = [
+            candidate
+            for candidate in matches
+            if candidate.company_rel
+            and (candidate.company_rel.email_domain or "").lower() == company_hint
+        ]
     authenticated = [
         candidate
         for candidate in matches

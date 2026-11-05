@@ -1,13 +1,25 @@
 <script setup>
 import { useRouter, useRoute } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
 import { useAuthStore } from '../../stores/auth'
+import { fallbackJobs, fetchLehrplanJobs } from '../../utils/lehrplanJobs'
 import BrandLogo from './BrandLogo.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
 
-const navItems = [
+// Sidebar children for the lehrplan jobs, fetched from the API and cached
+// (falls back to the bundled list on error).
+const lehrplanJobs = ref(fallbackJobs)
+onMounted(async () => {
+  const jobs = await fetchLehrplanJobs()
+  if (Array.isArray(jobs) && jobs.length) {
+    lehrplanJobs.value = jobs
+  }
+})
+
+const baseNavItems = [
   {
     to: '/projekte',
     prefix: '/projekte',
@@ -30,6 +42,11 @@ const navItems = [
     label: 'Wissen & Notizen'
   },
   {
+    to: '/lehrplan',
+    prefix: '/lehrplan',
+    label: 'Lehrplan'
+  },
+  {
     to: '/vorlagen',
     prefix: '/vorlagen',
     label: 'Vorlagen'
@@ -45,6 +62,20 @@ const navItems = [
     label: 'Account'
   }
 ]
+
+const navItems = computed(() =>
+  baseNavItems.map((item) =>
+    item.prefix === '/lehrplan'
+      ? {
+          ...item,
+          children: lehrplanJobs.value.map((job) => ({
+            to: `/lehrplan/${job.code}`,
+            label: String(job.name).replace(/ (EFZ|EBA)$/, '')
+          }))
+        }
+      : item
+  )
+)
 
 function isParentActive(item) {
   return route.path.startsWith(item.prefix)

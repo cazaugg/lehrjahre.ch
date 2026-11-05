@@ -8,6 +8,7 @@ import ProjektAuswertungView from '../views/ProjektAuswertungView.vue'
 import LerndokumentationView from '../views/LerndokumentationView.vue'
 import WissenView from '../views/WissenView.vue'
 import VorlagenView from '../views/VorlagenView.vue'
+import LehrplanJobView from '../views/LehrplanJobView.vue'
 import PersonenView from '../views/PersonenView.vue'
 import AccountView from '../views/AccountView.vue'
 
@@ -53,6 +54,12 @@ const routes = [
     component: LerndokumentationView
   },
   { path: '/wissen', name: 'wissen', component: WissenView },
+  { path: '/lehrplan', redirect: '/lehrplan/ET' },
+  {
+    path: '/lehrplan/:code',
+    name: 'lehrplan',
+    component: LehrplanJobView
+  },
   { path: '/vorlagen', name: 'vorlagen', component: VorlagenView },
   { path: '/personen', name: 'personen', component: PersonenView },
   { path: '/personen/:section', redirect: '/personen' },

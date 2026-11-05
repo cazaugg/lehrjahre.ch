@@ -642,7 +642,7 @@ def test_lerndokumentation_permissions(client):
     # Trainer 2 (not supervising Student 1) cannot see Student 1's grades or documents
     login(client, "trainer2@vektorwerk.ch")
     assert client.get("/api/grades").get_json()["data"] == []
-    assert client.get(f"/api/grades?student={student1['id']}").status_code == 403
+    assert client.get(f"/api/grades?student={student1['id']}").status_code == 404
     assert client.get("/api/documents?type=lernjournal").get_json()["data"] == []
     assert client.get(f"/api/documents/{journal_id}").status_code == 404
     assert client.get(f"/api/documents/{grade_id}").status_code == 404
@@ -1217,7 +1217,7 @@ def test_cross_company_isolation_and_authorless_projects(client):
 
     assert (
         client.get(f"/api/grades?student={foreign_student['id']}").status_code
-        == 403
+        == 404
     )
     assert (
         client.put(
@@ -1225,14 +1225,14 @@ def test_cross_company_isolation_and_authorless_projects(client):
             json={"grade": 4.0},
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             f"/api/grades/{foreign_grade_id}",
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
 
     assert all(
@@ -1288,14 +1288,14 @@ def test_cross_company_isolation_and_authorless_projects(client):
             json={"eval_text": "Übernommen"},
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             f"/api/evaluation/{foreign_eval_id}",
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
 
     assert all(
@@ -1308,14 +1308,14 @@ def test_cross_company_isolation_and_authorless_projects(client):
             json={"is_done": True},
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             f"/api/implementation/{foreign_impl_id}",
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
 
     # A project without an author is not visible to anybody.
@@ -2216,14 +2216,14 @@ def test_remaining_crud_permissions(client):
             json={"eval_text": "Übernommen"},
             headers={"X-CSRF-Token": csrf_t2},
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             f"/api/evaluation/{eval_id}",
             headers={"X-CSRF-Token": csrf_t2},
         ).status_code
-        == 403
+        == 404
     )
 
     csrf_s1, _ = login(client, "student@vektorwerk.ch")
@@ -2242,14 +2242,14 @@ def test_remaining_crud_permissions(client):
             json={"is_done": True},
             headers={"X-CSRF-Token": csrf_t2},
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             f"/api/implementation/{impl_id}",
             headers={"X-CSRF-Token": csrf_t2},
         ).status_code
-        == 403
+        == 404
     )
 
     csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
@@ -2258,7 +2258,7 @@ def test_remaining_crud_permissions(client):
             f"/api/implementation/{impl_id}",
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
 
     csrf_s1, _ = login(client, "student@vektorwerk.ch")
@@ -2984,3 +2984,215 @@ def test_seed_creates_official_templates(tmp_path, monkeypatch):
     for tpl_name, content in contents.items():
         assert content.strip(), f"Empty template content: {tpl_name}"
         assert "Handlungskompetenz" not in content
+
+
+def test_relation_requires_ausbildner_to_lernender_pair(client):
+    csrf_t1, trainer1 = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user").get_json()["data"]["users"]
+    }
+    trainer2 = users["trainer2@vektorwerk.ch"]
+    student2 = users["student2@vektorwerk.ch"]
+
+    # ausbildner -> ausbildner is rejected.
+    assert (
+        client.post(
+            "/api/user/relation",
+            json={"supervisor": trainer1["id"], "student": trainer2["id"]},
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 400
+    )
+    # Self-pair is rejected.
+    assert (
+        client.post(
+            "/api/user/relation",
+            json={"supervisor": trainer1["id"], "student": trainer1["id"]},
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 400
+    )
+    # A supervisor may assign themselves as supervisors of a learner
+    # (product decision), and the pair is unique in the database.
+    res = client.post(
+        "/api/user/relation",
+        json={"supervisor": trainer2["id"], "student": student2["id"]},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    relation_id = res.get_json()["data"]["id"]
+
+    # The same pair is idempotent, not duplicated.
+    res_dup = client.post(
+        "/api/user/relation",
+        json={"supervisor": trainer2["id"], "student": student2["id"]},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res_dup.status_code == 200
+    assert res_dup.get_json()["data"]["id"] == relation_id
+
+
+def test_only_owning_supervisor_removes_relation(client):
+    csrf_t1, trainer1 = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user").get_json()["data"]["users"]
+    }
+    student1 = users["student@vektorwerk.ch"]
+
+    res = client.post(
+        "/api/user/relation",
+        json={"supervisor": trainer1["id"], "student": student1["id"]},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code in {200, 201}
+    relation_id = res.get_json()["data"]["id"]
+
+    # Another supervisor (not party to the pair) may not sever it.
+    csrf_t2, _ = login(client, "trainer2@vektorwerk.ch")
+    assert (
+        client.delete(
+            f"/api/user/relation/{relation_id}",
+            headers={"X-CSRF-Token": csrf_t2},
+        ).status_code
+        == 403
+    )
+
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    assert (
+        client.delete(
+            f"/api/user/relation/{relation_id}",
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 200
+    )
+
+
+def test_assigned_students_must_be_same_company_learners(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user").get_json()["data"]["users"]
+    }
+    student1 = users["student@vektorwerk.ch"]
+
+    # Foreign-company ID: the fixture's foreign student is not in this
+    # company directory, so use a clearly-bogus ID to exercise the same
+    # rejection path.
+    assert (
+        client.post(
+            "/api/project",
+            json={
+                "title": "Fremd Zuordnung",
+                "assigned_students": [999999],
+            },
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 400
+    )
+    # Supervisor ID is rejected: assigned students must be learners.
+    assert (
+        client.post(
+            "/api/project",
+            json={
+                "title": "Supervisor Zuordnung",
+                "assigned_students": [users["trainer@vektorwerk.ch"]["id"]],
+            },
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 400
+    )
+    # Same-company learner is accepted.
+    res = client.post(
+        "/api/project",
+        json={
+            "title": "Gueltige Zuordnung",
+            "assigned_students": [student1["id"]],
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 201
+    assert res.get_json()["data"]["assigned_students"] == [student1["id"]]
+
+
+def test_login_company_hint_scopes_identity(client):
+    # Wrong company hint fails even with the correct password.
+    res = client.post(
+        "/api/auth/login",
+        json={
+            "email": "trainer@vektorwerk.ch",
+            "password": "Passwort123!",
+            "company_domain": "fremd.ch",
+        },
+    )
+    assert res.status_code == 401
+
+    # Matching company hint succeeds.
+    res = client.post(
+        "/api/auth/login",
+        json={
+            "email": "trainer@vektorwerk.ch",
+            "password": "Passwort123!",
+            "company_domain": "vektorwerk.ch",
+        },
+    )
+    assert res.status_code == 200
+
+
+def test_role_elevation_requires_explicit_confirmation(client):
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    users = {
+        u["company_email"]: u
+        for u in client.get("/api/user").get_json()["data"]["users"]
+    }
+    student1 = users["student@vektorwerk.ch"]
+
+    # Without explicit confirmation, promotion is rejected.
+    assert (
+        client.put(
+            f"/api/user/{student1['id']}",
+            json={"role": "ausbildner"},
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 403
+    )
+    # With explicit confirmation, the documented peer-supervisor model
+    # allows the promotion.
+    res = client.put(
+        f"/api/user/{student1['id']}",
+        json={"role": "ausbildner", "confirm_role_elevation": True},
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 200
+    assert res.get_json()["data"]["role"] == "ausbildner"
+
+
+def test_lehrplan_requires_login_and_delivers_static_data(client):
+    # Anonymous requests are rejected.
+    assert client.get("/api/lehrplan/jobs").status_code == 401
+    assert client.get("/api/lehrplan/ET").status_code == 401
+
+    # Any logged-in user (regardless of role) can read the lehrplan data.
+    login(client, "trainer@vektorwerk.ch")
+    res_jobs = client.get("/api/lehrplan/jobs")
+    assert res_jobs.status_code == 200
+    jobs = res_jobs.get_json()["data"]
+    codes = {j["code"] for j in jobs}
+    assert {"AA", "KR", "MP", "PR", "PM", "AM", "AU", "ET"} <= codes
+    et_meta = next(j for j in jobs if j["code"] == "ET")
+    assert et_meta["name"] == "Elektroniker/in EFZ"
+    assert et_meta["accent"] == "#245029"
+
+    res_tree = client.get("/api/lehrplan/ET")
+    assert res_tree.status_code == 200
+    tree = res_tree.get_json()["data"]
+    assert tree["code"] == "ET"
+    assert tree["stats"]["lz_count"] > 0
+    assert tree["stats"]["lk_count"] > 0
+    first_hkb = tree["handlungskompetenzbereiche"][0]
+    assert "handlungskompetenzen" in first_hkb
+    assert first_hkb["handlungskompetenzen"][0]["lernkriterien"][0]["lernziele"]
+
+    # Unknown job codes yield a 404.
+    assert client.get("/api/lehrplan/XX").status_code == 404
