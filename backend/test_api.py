@@ -3080,3 +3080,33 @@ def test_role_elevation_requires_explicit_confirmation(client):
     )
     assert res.status_code == 200
     assert res.get_json()["data"]["role"] == "ausbildner"
+
+
+def test_lehrplan_requires_login_and_delivers_static_data(client):
+    # Anonymous requests are rejected.
+    assert client.get("/api/lehrplan/jobs").status_code == 401
+    assert client.get("/api/lehrplan/ET").status_code == 401
+
+    # Any logged-in user (regardless of role) can read the lehrplan data.
+    login(client, "trainer@vektorwerk.ch")
+    res_jobs = client.get("/api/lehrplan/jobs")
+    assert res_jobs.status_code == 200
+    jobs = res_jobs.get_json()["data"]
+    codes = {j["code"] for j in jobs}
+    assert {"AA", "KR", "MP", "PR", "PM", "AM", "AU", "ET"} <= codes
+    et_meta = next(j for j in jobs if j["code"] == "ET")
+    assert et_meta["name"] == "Elektroniker/in EFZ"
+    assert et_meta["accent"] == "#245029"
+
+    res_tree = client.get("/api/lehrplan/ET")
+    assert res_tree.status_code == 200
+    tree = res_tree.get_json()["data"]
+    assert tree["code"] == "ET"
+    assert tree["stats"]["lz_count"] > 0
+    assert tree["stats"]["lk_count"] > 0
+    first_hkb = tree["handlungskompetenzbereiche"][0]
+    assert "handlungskompetenzen" in first_hkb
+    assert first_hkb["handlungskompetenzen"][0]["lernkriterien"][0]["lernziele"]
+
+    # Unknown job codes yield a 404.
+    assert client.get("/api/lehrplan/XX").status_code == 404

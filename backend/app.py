@@ -15,6 +15,7 @@ from backend.routes.evaluation_routes import bp as evaluation_bp
 from backend.routes.documents_routes import bp as documents_bp
 from backend.routes.grades_routes import bp as grades_bp
 from backend.routes.knowledge_routes import bp as knowledge_bp
+from backend.routes.lehrplan_routes import bp as lehrplan_bp
 
 
 def create_app(config_overrides: dict | None = None) -> Flask:
@@ -92,6 +93,7 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     app.register_blueprint(documents_bp)
     app.register_blueprint(grades_bp)
     app.register_blueprint(knowledge_bp)
+    app.register_blueprint(lehrplan_bp)
 
     @app.errorhandler(ValidationError)
     def invalid_request(error):
