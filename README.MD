@@ -53,7 +53,7 @@ LEHRJAHRE_ENV=development uv run python -m backend.companies list
 **Development-only demo accounts (Password: `Lehrjahre2026!`):**
 - **Berufsbildner:** `thomas.keller@vektorwerk.ch`
 - **HR / Rekrutierung:** `sandra.meier@vektorwerk.ch`
-- **Lernender (Polymechaniker EFZ):** `lukas.frei@vektorwerk.ch`
+- **Lernende (Konstrukteur/in EFZ, 1.–3. Lehrjahr):** `lea.buchmann@vektorwerk.ch`, `sven.hug@vektorwerk.ch`, `livia.kaelin@vektorwerk.ch`
 
 These demo accounts are for local development only. Do not seed them in production.
 

@@ -57,6 +57,7 @@ watch(
 function initialiseSelection() {
   error.value = ''
   selected.value = []
+  selectedLks.value = []
   const def = String(props.defaultJobCode || '').toUpperCase()
   const valid = jobs.value.some((j) => j.code === def)
   const next = valid ? def : (jobs.value[0]?.code ?? '')
@@ -73,6 +74,8 @@ watch(code, (c) => {
 
 async function loadTree(c) {
   search.value = ''
+  selected.value = []
+  selectedLks.value = []
   resetFilters()
   resetOpenState()
   if (!c) {
@@ -208,6 +211,26 @@ const searchWords = computed(() => {
     .map((w) => w.toLowerCase())
 })
 
+// Suchtreffer im Text hervorheben (für v-html; Dimensionen wie bei der Suche).
+const htmlEscape = (s) =>
+  String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+function hl(text) {
+  const s = text == null ? '' : String(text)
+  const words = searchWords.value
+  let out = htmlEscape(s)
+  if (!words || !s) return out
+  const pattern = words
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .filter(Boolean)
+    .join('|')
+  if (!pattern) return out
+  return out.replace(
+    new RegExp('(' + pattern + ')', 'gi'),
+    '<mark class="gp-mark">$1</mark>'
+  )
+}
+
 // ---- Einklappen -------------------------------------------------------------------
 // Standard zugeklappt (kompakt im Modal); im Suchmodus werden Treffer-Sektionen erzwungen offen.
 const openState = reactive({})
@@ -310,8 +333,18 @@ function walkTree() {
 
         if (search.value) {
           if (!lkMatches && lzItems.length === 0) continue
-        } else if (lzItems.length === 0) {
-          continue
+        } else {
+          // Ohne Suche: LK bleibt sichtbar, sobald die Filter zutreffen –
+          // auch ohne eigene Lernziele (z.B. Lernort BE hat nur LK-Texte).
+          const hasLzs = (lk.lernziele || []).length > 0
+          if (filters.semesters.length > 0) {
+            if (hasLzs) {
+              if (lzItems.length === 0) continue
+            } else {
+              const lkSems = lk.Semester || []
+              if (!lkSems.some((s) => filters.semesters.includes(s))) continue
+            }
+          }
         }
 
         lkGroups.push({ lk, items: lzItems })
@@ -383,6 +416,8 @@ const view = computed(() => {
 
 // ---- Auswahl ---------------------------------------------------------------------
 const selected = ref([])
+/** Gewählte Lernkriterien ohne eigene Lernziele (Objekte mit ID LK usw.). */
+const selectedLks = ref([])
 
 function isSelected(id) {
   return selected.value.includes(id)
@@ -394,10 +429,20 @@ function toggleLz(id) {
   else selected.value.push(id)
 }
 
-const selectedCount = computed(() => selected.value.length)
+function isSelectedLk(lk) {
+  return selectedLks.value.some((x) => x['ID LK'] === lk['ID LK'])
+}
+
+function toggleLk(lk) {
+  const idx = selectedLks.value.findIndex((x) => x['ID LK'] === lk['ID LK'])
+  if (idx >= 0) selectedLks.value.splice(idx, 1)
+  else selectedLks.value.push(lk)
+}
+
+const selectedCount = computed(() => selected.value.length + selectedLks.value.length)
 
 function confirmSelection() {
-  const picked = selected.value
+  const pickedLzs = selected.value
     .map((id) => flatLZs.value.find((x) => String(x.lz['ID LZ']) === id))
     .filter(Boolean)
     .map((x) => ({
@@ -408,7 +453,16 @@ function confirmSelection() {
       semesters: x.lz.Semester,
       jobCode: code.value
     }))
-  emit('confirm', picked)
+  // LKs ohne Lernziele: das Lernkriterium selbst wird als Ziel gewählt.
+  const pickedLks = selectedLks.value.map((lk) => ({
+    id: String(lk['ID LK']),
+    description: lk['Beschreibung LK'],
+    lkId: String(lk['ID LK']),
+    lernort: lk.Lernort,
+    semesters: lk.Semester,
+    jobCode: code.value
+  }))
+  emit('confirm', [...pickedLzs, ...pickedLks])
   emit('close')
 }
 
@@ -498,13 +552,13 @@ function formatSemesters(arr) {
             <div class="gp-options">
               <button
                 v-for="opt in semesterOptions"
-                :key="opt.value"
+                :key="opt"
                 type="button"
                 class="gp-pill"
-                :class="{ active: filters.semesters.includes(opt.value) }"
-                @click="toggleFilter('semesters', opt.value)"
+                :class="{ active: filters.semesters.includes(opt) }"
+                @click="toggleFilter('semesters', opt)"
               >
-                {{ opt.label }}
+                {{ opt }}
               </button>
             </div>
           </div>
@@ -533,7 +587,7 @@ function formatSemesters(arr) {
             <span class="gp-code-b">{{
               String(section.hkb['ID HKB']).split(' ').pop().toUpperCase()
             }}</span>
-            <span class="gp-name">{{ section.hkb.Name }}</span>
+            <span class="gp-name" v-html="hl(section.hkb.Name)"></span>
           </div>
           <div
             class="gp-subject-content"
@@ -546,8 +600,8 @@ function formatSemesters(arr) {
                 @click="toggleSection(comp.hk['ID HK'])"
               >
                 <span class="arrow">▶</span>
-                <span class="gp-code">{{ comp.hk['ID HK'] }}</span>
-                <span class="gp-name-sm">{{ comp.hk.Name }}</span>
+                <span class="gp-code" v-html="hl(comp.hk['ID HK'])"></span>
+                <span class="gp-name-sm" v-html="hl(comp.hk.Name)"></span>
                 <span
                   class="gp-pw"
                   :class="comp.hk['P/W'] === 'W' ? 'optional' : 'mandatory'"
@@ -559,18 +613,27 @@ function formatSemesters(arr) {
                 class="gp-competence-content"
                 :class="{ open: isOpen(comp.hk['ID HK']) || !!search }"
               >
-                <p v-if="comp.hk.Beschreibung" class="gp-competence-desc">
-                  {{ comp.hk.Beschreibung }}
-                </p>
                 <div v-for="lkv in comp.lks" :key="lkv.lk['ID LK']" class="gp-lk">
                   <div
                     class="gp-head gp-lk-head"
-                    :class="{ open: isOpen(lkv.lk['ID LK']) || !!search }"
+                    :class="{
+                      open: isOpen(lkv.lk['ID LK']) || !!search,
+                      picked: lkv.items.length === 0 && isSelectedLk(lkv.lk)
+                    }"
                     @click="toggleSection(lkv.lk['ID LK'])"
                   >
                     <span class="arrow">▶</span>
-                    <span class="gp-code">{{ lkv.lk['ID LK'] }}</span>
-                    <span class="gp-name-sm gp-lk-desc">{{ lkv.lk['Beschreibung LK'] }}</span>
+                    <input
+                      v-if="lkv.items.length === 0"
+                      type="checkbox"
+                      :title="'Lernkriterium wählen (' + lkv.lk['ID LK'] + ')'"
+                      :checked="isSelectedLk(lkv.lk)"
+                      :disabled="selectedExisting.has(String(lkv.lk['ID LK']))"
+                      @click.stop
+                      @change="toggleLk(lkv.lk)"
+                    />
+                    <span class="gp-code" v-html="hl(lkv.lk['ID LK'])"></span>
+                    <span class="gp-name-sm gp-lk-desc" v-html="hl(lkv.lk['Beschreibung LK'])"></span>
                     <span class="gp-lernort">{{ lkv.lk.Lernort }}</span>
                     <span v-if="formatSemesters(lkv.lk.Semester)" class="gp-sem">{{
                       formatSemesters(lkv.lk.Semester)
@@ -592,8 +655,8 @@ function formatSemesters(arr) {
                         :disabled="selectedExisting.has(String(item.lz['ID LZ']))"
                         @change="toggleLz(String(item.lz['ID LZ']))"
                       />
-                      <span class="gp-lz-id">{{ item.lz['ID LZ'] }}</span>
-                      <span class="gp-lz-desc">{{ item.lz['Beschreibung LZ'] }}</span>
+                      <span class="gp-lz-id" v-html="hl(item.lz['ID LZ'])"></span>
+                      <span class="gp-lz-desc" v-html="hl(item.lz['Beschreibung LZ'])"></span>
                       <span class="gp-sem">{{
                         Array.isArray(item.lz.Semester)
                           ? item.lz.Semester.join(', ')
@@ -863,16 +926,6 @@ function formatSemesters(arr) {
   padding: var(--space-1) var(--space-2) 0 var(--space-3);
 }
 
-.gp-competence-desc {
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  background: var(--color-surface-muted);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  margin: 0 0 var(--space-1) 0;
-}
-
 .gp-lk {
   margin-bottom: var(--space-1);
 }
@@ -905,6 +958,15 @@ function formatSemesters(arr) {
 }
 
 .gp-lz-row input {
+  flex-shrink: 0;
+  transform: translateY(1px);
+}
+
+.gp-lk-head.picked {
+  background: var(--color-primary-soft);
+}
+
+.gp-lk-head input[type='checkbox'] {
   flex-shrink: 0;
   transform: translateY(1px);
 }
@@ -972,5 +1034,14 @@ function formatSemesters(arr) {
   .gp-lz-id {
     order: 3;
   }
+}
+
+/* Suchtreffer-Hervorhebung (Content steckt in v-html → :deep nötig). */
+.gp-tree :deep(mark.gp-mark) {
+  background: var(--color-primary, #164e78);
+  color: #fff;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 1px;
 }
 </style>
