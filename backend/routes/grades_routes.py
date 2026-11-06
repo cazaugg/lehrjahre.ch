@@ -1,4 +1,5 @@
 from datetime import date
+import json
 from flask import Blueprint, request, jsonify
 from backend.models import db, Grades
 from backend.auth import login_required, get_current_user, can_access_student
@@ -10,6 +11,19 @@ from backend.validation import parse_int, parse_str
 def _not_found():
     """Consistent 404 for foreign-company or otherwise inaccessible records."""
     return jsonify({"error": "Nicht gefunden."}), 404
+
+
+def serialize_goals(goals_input) -> str:
+    """Store goal strings as a JSON list (same format as Project.goals)."""
+    if goals_input is None:
+        return "[]"
+    if isinstance(goals_input, list):
+        cleaned = [str(g).strip() for g in goals_input if str(g).strip()]
+        return json.dumps(cleaned, ensure_ascii=False)
+    if isinstance(goals_input, str):
+        lines = [line.strip() for line in goals_input.splitlines() if line.strip()]
+        return json.dumps(lines, ensure_ascii=False)
+    return "[]"
 
 
 bp = Blueprint("api_grades", __name__, url_prefix="/api/grades")
@@ -93,6 +107,7 @@ def create_grade():
         grade=round(grade_float, 2),
         title=title,
         comment=parse_str(data.get("comment"), "Kommentar"),
+        goals=serialize_goals(data.get("goals")),
     )
     db.session.add(new_grade)
     db.session.commit()
@@ -124,6 +139,8 @@ def update_grade(grade_id):
         grade_obj.date = parse_date(data.get("date"))
     if "comment" in data:
         grade_obj.comment = parse_str(data.get("comment"), "Kommentar")
+    if "goals" in data:
+        grade_obj.goals = serialize_goals(data.get("goals"))
     if "grade" in data:
         try:
             val = float(data["grade"])

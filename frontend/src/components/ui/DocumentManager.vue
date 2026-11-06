@@ -243,32 +243,36 @@ function isTextDocument(doc) {
   return fn.endsWith('.md') || fn.endsWith('.txt')
 }
 
-// ---- Lernziele am Lernjournal-Eintrag --------------------------------------------
+// ---- Lernziele an Dokumenten (Lernjournal, Zeugnisse & Kursnachweise) -------------
+const GOAL_TYPES = ['lernjournal', 'zeugnis', 'kursnachweis']
 const formGoals = ref([])
 const newGoalText = ref('')
 const showGoalPicker = ref(false)
 
 const goalEditingDoc = computed(() =>
-  editingDoc.value && editingDoc.value.type === 'lernjournal' && !editingDoc.value.is_template
+  editingDoc.value &&
+  GOAL_TYPES.includes(editingDoc.value.type) &&
+  !editingDoc.value.is_template
 )
 
 function canEditGoals(doc) {
-  if (!doc || doc.type !== 'lernjournal' || doc.is_template) return false
+  if (!doc || !GOAL_TYPES.includes(doc.type) || doc.is_template) return false
   if (auth.isStudent) return doc.owner === auth.user?.id
   if (auth.isTrainer) return auth.isSubordinate(doc.owner)
   return false
 }
 
-// Vorgesetzte/r: bearbeitet nur die Ziele, der Eintrag selbst bleibt gesperrt.
+// Vorgesetzte/r: bearbeitet nur die Ziele, der Lernjournal-Eintrag selbst bleibt
+// gesperrt (Zeugnisse/Kursnachweise dürfen sie voll bearbeiten).
 const isGoalOnlyEdit = computed(() => {
-  if (!goalEditingDoc.value) return false
+  if (!goalEditingDoc.value || editingDoc.value.type !== 'lernjournal') return false
   return auth.isTrainer
 })
 
-/** Ziele-Pflege im Editor für lernjournal-Einträge. */
+/** Ziele-Pflege im Editor für Ziel-Dokumenttypen. */
 const showGoalFields = computed(() => {
   const t = editingDoc.value?.type || formType.value
-  if (t !== 'lernjournal') return false
+  if (!GOAL_TYPES.includes(t)) return false
   if (editingDoc.value) return canEditGoals(editingDoc.value)
   if (auth.isStudent) return true
   if (auth.isTrainer) return auth.isSubordinate(Number(formOwner.value))
@@ -424,9 +428,7 @@ async function saveDocument() {
           is_done: formIsDone.value,
           is_template: formIsTemplate.value
         }
-        if (
-          (editingDoc.value.type || formType.value) === 'lernjournal'
-        ) {
+        if (GOAL_TYPES.includes(editingDoc.value.type || formType.value)) {
           payload.goals = formGoals.value
         }
         if (mode.value === 'text') {
@@ -451,6 +453,9 @@ async function saveDocument() {
       fd.append('owner', String(ownerToSave))
       fd.append('is_done', String(formIsDone.value))
       fd.append('is_template', String(formIsTemplate.value))
+      if (GOAL_TYPES.includes(formType.value)) {
+        fd.append('goals', JSON.stringify(formGoals.value))
+      }
 
       const created = await apiFetch('/api/documents', {
         method: 'POST',
@@ -944,6 +949,42 @@ function formatDate(iso) {
           <div class="form-group">
             <label class="form-label">Kurzbeschreibung / Bemerkung</label>
             <input v-model="formDescription" type="text" class="form-control" />
+          </div>
+
+          <!-- Lernziele (Zeugnisse & Kursnachweise, Lernjournal) -->
+          <div v-if="showGoalFields" class="form-group">
+            <label class="form-label">Lernziele</label>
+
+            <div class="goal-list-display">
+              <span
+                v-for="(g, idx) in formGoals"
+                :key="g + idx"
+                class="goal-chip"
+              >
+                <LernzielLabel :goal="g" />
+                <button
+                  type="button"
+                  class="goal-chip-remove"
+                  title="Lernziel entfernen"
+                  @click="removeGoal(idx)"
+                >✕</button>
+              </span>
+              <span v-if="formGoals.length === 0" class="text-muted">Noch keine Lernziele erfasst.</span>
+            </div>
+
+            <div class="flex-gap" style="margin-top: var(--space-2)">
+              <input
+                v-model="newGoalText"
+                type="text"
+                class="form-control goal-add-input"
+                placeholder="Neues Lernziel eingeben..."
+                @keydown.enter.prevent="addGoal"
+              />
+              <button type="button" class="btn btn-sm" @click="addGoal">+ Hinzufügen</button>
+              <button type="button" class="btn btn-sm" @click="showGoalPicker = true">
+                + Lernziel aus Lehrplan wählen
+              </button>
+            </div>
           </div>
 
           <div v-if="!editingDoc" class="form-group">
