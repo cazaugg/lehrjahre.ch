@@ -100,9 +100,16 @@ function fillDemo(demoEmail) {
           <button
             type="button"
             class="btn btn-sm"
-            @click="fillDemo('lukas.frei@vektorwerk.ch')"
+            @click="fillDemo('lea.buchmann@vektorwerk.ch')"
           >
-            Lernender (Polymechaniker EFZ)
+            Lernende (Konstrukteurin EFZ, 1. Lehrjahr)
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            @click="fillDemo('livia.kaelin@vektorwerk.ch')"
+          >
+            Lernende (Konstrukteurin EFZ, 3. Lehrjahr)
           </button>
         </div>
       </div>

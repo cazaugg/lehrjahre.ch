@@ -303,6 +303,14 @@ a:hover {
   margin-bottom: var(--space-1);
 }
 
+/* 🎯-Symbol vor Projektzielen: optisch auf die Text-Grundlinie gehoben. */
+.goal-icon {
+  vertical-align: middle;
+  font-size: 0.95em;
+  position: relative;
+  top: -0.3em;
+}
+
 .form-control {
   width: 100%;
   padding: 0.5rem 0.75rem;

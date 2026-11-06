@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Seed data:** Rebuilt the demo projects around the Konstrukteur/in EFZ Lehrplan: three Konstrukteur students (1st–3rd year, projects in `backend/seed.py` quote Lernziele from `data/lehrplan/lehrplan_KR.json` verbatim in their goals), replacing the previous mixed-job demo data.
+
 - **Backend:** Added a `company` table and moved users from the free-text `company` column to a mandatory `company_id` foreign key. Company membership cannot be changed through the API.
 - **Backend:** Enforced that a user's `company_email` matches the company's `email_domain`. New users inherit the company address when none is supplied.
 - **Tooling:** Added `backend.companies` CLI (`add`, `list`) for provisioning companies and a startup migration for existing SQLite databases.

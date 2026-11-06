@@ -465,7 +465,7 @@ async function saveGlobalEvaluation(markCompleted = false) {
                 class="sub-eval-item"
               >
                 <div class="form-group" style="margin-bottom: 0">
-                  <label class="form-label">🎯 <LernzielLabel :goal="ge.goal" /></label>
+                  <label class="form-label"><LernzielLabel icon :goal="ge.goal" /></label>
                   <textarea
                     v-model="ge.eval_text"
                     class="form-control"

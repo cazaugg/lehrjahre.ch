@@ -428,7 +428,7 @@ async function deleteProject() {
           </div>
           <div v-else class="goal-edit-list">
             <div v-for="(g, idx) in goals" :key="idx" class="goal-edit-row">
-              <template v-if="/^\s*LZ_\d+\s*$/.test(g)">
+              <template v-if="/^\s*(LZ_\d+(?:_\d+)*|LK:.+?)\s*$/.test(g)">
                 <div class="goal-id-display">
                   <LernzielLabel :goal="g" />
                 </div>
