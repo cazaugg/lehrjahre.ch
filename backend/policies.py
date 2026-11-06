@@ -11,8 +11,18 @@ from backend.models import (
 )
 
 
+def is_admin(actor: User | None) -> bool:
+    """Administrators manage people and relationships company-wide."""
+    return bool(actor and actor.role == "admin")
+
+
 def is_supervisor(actor: User | None) -> bool:
-    return bool(actor and actor.role == "ausbildner")
+    """Supervisor capabilities (projects, evals, grades, documents).
+
+    An admin inherits all supervisor capabilities; supervisors keep exactly
+    their current reach (own data + subordinate students).
+    """
+    return bool(actor and actor.role in ("ausbildner", "admin"))
 
 
 def is_student(actor: User | None) -> bool:
@@ -69,6 +79,7 @@ def can_access_student(actor: User | None, student_id: int | None) -> bool:
 
 def can_view_private_contacts(actor: User | None, target: User | None) -> bool:
     """
+    - Admins can view the private contacts of everyone in the company.
     - Everyone can view their own private contacts.
     - Supervisors can view private contacts ONLY of their subordinate students.
     - Never visible for other supervisors or non-subordinate students.
@@ -77,6 +88,8 @@ def can_view_private_contacts(actor: User | None, target: User | None) -> bool:
         return False
     if actor.id == target.id:
         return True
+    if is_admin(actor):
+        return True
     if is_supervisor(actor) and target.role == "lernender":
         return target.id in supervised_student_ids(actor)
     return False
@@ -84,12 +97,15 @@ def can_view_private_contacts(actor: User | None, target: User | None) -> bool:
 
 def can_edit_user_contacts(actor: User | None, target: User | None) -> bool:
     """
+    - Admins can edit the contacts of everyone in the company.
     - Supervisors can edit their own contacts (company, school, private)
       and all contacts of their subordinate students.
     - Students cannot edit any contact fields (not even their own).
     """
     if not actor or not target or actor.company_id != target.company_id:
         return False
+    if is_admin(actor):
+        return True
     if not is_supervisor(actor):
         return False
     if actor.id == target.id:
@@ -100,9 +116,12 @@ def can_edit_user_contacts(actor: User | None, target: User | None) -> bool:
 
 
 def can_edit_student_master_data(actor: User | None, target: User | None) -> bool:
-    """Supervisors can edit master data of their subordinate students."""
+    """Admins edit master data of everyone; supervisors of their subordinate
+    students (and themselves)."""
     if not actor or not target or actor.company_id != target.company_id:
         return False
+    if is_admin(actor):
+        return True
     if not is_supervisor(actor):
         return False
     if actor.id == target.id:

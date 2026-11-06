@@ -84,6 +84,15 @@ def create_fixture_user(
     return user
 
 
+def _company_user_map(client):
+    """Log in and return {company_email: user_dict} of the fixture company."""
+    _, _ = login(client, "trainer@vektorwerk.ch")
+    return {
+        u["company_email"]: u
+        for u in client.get("/api/user").get_json()["data"]["users"]
+    }
+
+
 @pytest.fixture
 def client():
     tmp_dir = tempfile.mkdtemp(prefix="lehrjahre_test_")
@@ -147,6 +156,22 @@ def client():
             school_phone="052 222 22 22",
             company_email="trainer2@vektorwerk.ch",
             job_title="Fachvorgesetzter",
+        )
+        # Company administrator: user/relationship management is exclusively
+        # hers; visibility rules are the same as a supervisor's.
+        admin_user = create_fixture_user(
+            company,
+            role="admin",
+            name="Sabine",
+            surname="Adler",
+            private_address="Adminweg 1",
+            private_email="admin1@privat.ch",
+            private_phone="079 100 10 10",
+            school_address="",
+            school_email="",
+            school_phone="",
+            company_email="admin@vektorwerk.ch",
+            job_title="Administrator",
         )
         # Student 1 (subordinate to trainer1)
         student1 = create_fixture_user(
@@ -242,6 +267,7 @@ def test_companies_have_separate_database_files_on_disk(client):
         "vektorwerk.ch": {
             "trainer@vektorwerk.ch",
             "trainer2@vektorwerk.ch",
+            "admin@vektorwerk.ch",
             "student@vektorwerk.ch",
             "student2@vektorwerk.ch",
         },
@@ -874,7 +900,9 @@ def test_personen_and_account_contact_privacy(client):
 
 
 def test_company_membership_and_email_domain(client):
-    csrf, trainer = login(client, "trainer@vektorwerk.ch")
+    # Creating users — and master-data changes — are admin capabilities now.
+    _, trainer = login(client, "trainer@vektorwerk.ch")
+    csrf, _ = login(client, "admin@vektorwerk.ch")
 
     def create_user(email, **extra):
         payload = {
@@ -1740,16 +1768,26 @@ def test_deleting_user_reassigns_projects(client):
     }
     trainer2_id = users["trainer2@vektorwerk.ch"]["id"]
 
+    # Deleting users is an admin capability: a supervisor's attempt fails.
+    assert (
+        client.delete(
+            f"/api/user/{trainer2_id}",
+            headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 403
+    )
+
+    csrf_admin, admin = login(client, "admin@vektorwerk.ch")
     res = client.delete(
         f"/api/user/{trainer2_id}",
-        headers={"X-CSRF-Token": csrf_t1},
+        headers={"X-CSRF-Token": csrf_admin},
     )
     assert res.status_code == 200
 
     with company_context(client):
         project = db.session.get(Project, project_id)
         assert project is not None
-        assert project.author == trainer1["id"]
+        assert project.author == admin["id"]
         assert Project.query.filter(Project.author.is_(None)).count() == 0
 
     assert client.get(f"/api/project/{project_id}").status_code == 200
@@ -2860,13 +2898,16 @@ def test_logout_all_revokes_all_sessions(client):
 
 
 def test_invalid_payloads_return_400(client):
-    csrf, _ = login(client, "trainer@vektorwerk.ch")
+    # Relation management requires an admin; even with an admin session the
+    # invalid payload must return a clean 400.
+    _, _ = login(client, "trainer@vektorwerk.ch")
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
 
     assert (
         client.post(
             "/api/project",
             json={"title": "Ungültiges Elternprojekt", "parent_project": "abc"},
-            headers={"X-CSRF-Token": csrf},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
@@ -2874,7 +2915,7 @@ def test_invalid_payloads_return_400(client):
         client.post(
             "/api/user/relation",
             json={"supervisor": "abc", "student": 1},
-            headers={"X-CSRF-Token": csrf},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
@@ -2882,7 +2923,7 @@ def test_invalid_payloads_return_400(client):
         client.post(
             "/api/project",
             json={"title": "Ungültige Freigabe", "is_published": "maybe"},
-            headers={"X-CSRF-Token": csrf},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
@@ -2890,7 +2931,7 @@ def test_invalid_payloads_return_400(client):
         client.post(
             "/api/project",
             json={"title": 123},
-            headers={"X-CSRF-Token": csrf},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
@@ -2898,7 +2939,7 @@ def test_invalid_payloads_return_400(client):
         client.post(
             "/api/project",
             json=["not", "an", "object"],
-            headers={"X-CSRF-Token": csrf},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
@@ -2955,7 +2996,7 @@ def test_login_rate_limit(client):
 
 
 def test_create_user_requires_password(client):
-    csrf, _ = login(client, "trainer@vektorwerk.ch")
+    csrf, _ = login(client, "admin@vektorwerk.ch")
     res = client.post(
         "/api/user",
         json={
@@ -2969,6 +3010,79 @@ def test_create_user_requires_password(client):
     )
     assert res.status_code == 400
     assert "Passwort" in res.get_json()["error"]
+
+
+def test_user_and_relation_management_is_admin_only(client):
+    # A supervisor can no longer create or delete people, nor manage
+    # relationships at all — those are exclusively admin capabilities.
+    csrf_t1, trainer1 = login(client, "trainer@vektorwerk.ch")
+    res = client.post(
+        "/api/user",
+        json={
+            "role": "lernender",
+            "name": "Max",
+            "surname": "Muster",
+            "company_email": "max.muster@vektorwerk.ch",
+            "job_title": "Polymechanikerin / Polymechaniker EFZ",
+            "password": "Passwort123!",
+        },
+        headers={"X-CSRF-Token": csrf_t1},
+    )
+    assert res.status_code == 403
+
+    csrf_s1, _ = login(client, "student@vektorwerk.ch")
+    assert (
+        client.post(
+            "/api/user/relation",
+            json={"supervisor": trainer1["id"], "student": trainer1["id"]},
+            headers={"X-CSRF-Token": csrf_s1},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.delete(
+            "/api/user/relation/1",
+            headers={"X-CSRF-Token": csrf_s1},
+        ).status_code
+        == 403
+    )
+
+    # The admin has full user and relationship management.
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
+    res = client.post(
+        "/api/user",
+        json={
+            "role": "lernender",
+            "name": "Max",
+            "surname": "Muster",
+            "company_email": "max.muster@vektorwerk.ch",
+            "job_title": "Polymechanikerin / Polymechaniker EFZ",
+            "password": "Passwort123!",
+        },
+        headers={"X-CSRF-Token": csrf_admin},
+    )
+    assert res.status_code == 201
+    new_user = res.get_json()["data"]
+
+    res = client.post(
+        "/api/user/relation",
+        json={"supervisor": trainer1["id"], "student": new_user["id"]},
+        headers={"X-CSRF-Token": csrf_admin},
+    )
+    assert res.status_code == 201
+    relation_id = res.get_json()["data"]["id"]
+
+    res = client.delete(
+        f"/api/user/relation/{relation_id}",
+        headers={"X-CSRF-Token": csrf_admin},
+    )
+    assert res.status_code == 200
+
+    res = client.delete(
+        f"/api/user/{new_user['id']}",
+        headers={"X-CSRF-Token": csrf_admin},
+    )
+    assert res.status_code == 200
 
 
 def test_production_security_config_is_enforced(tmp_path):
@@ -3008,10 +3122,11 @@ def test_deleting_user_removes_document_files(client):
         abs_path = resolve_safe_path(rel_path)
     assert os.path.isfile(abs_path)
 
-    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    # Deleting users is an admin capability.
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
     res = client.delete(
         f"/api/user/{student1['id']}",
-        headers={"X-CSRF-Token": csrf_t1},
+        headers={"X-CSRF-Token": csrf_admin},
     )
     assert res.status_code == 200
     assert not os.path.isfile(abs_path)
@@ -3063,11 +3178,13 @@ def test_seed_creates_official_templates(tmp_path, monkeypatch):
 
 
 def test_relation_requires_ausbildner_to_lernender_pair(client):
-    csrf_t1, trainer1 = login(client, "trainer@vektorwerk.ch")
+    # Relation management is admin-only; the admin validates the pair rules.
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
     users = {
         u["company_email"]: u
         for u in client.get("/api/user").get_json()["data"]["users"]
     }
+    trainer1 = users["trainer@vektorwerk.ch"]
     trainer2 = users["trainer2@vektorwerk.ch"]
     student2 = users["student2@vektorwerk.ch"]
 
@@ -3076,7 +3193,7 @@ def test_relation_requires_ausbildner_to_lernender_pair(client):
         client.post(
             "/api/user/relation",
             json={"supervisor": trainer1["id"], "student": trainer2["id"]},
-            headers={"X-CSRF-Token": csrf_t1},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
@@ -3085,16 +3202,16 @@ def test_relation_requires_ausbildner_to_lernender_pair(client):
         client.post(
             "/api/user/relation",
             json={"supervisor": trainer1["id"], "student": trainer1["id"]},
-            headers={"X-CSRF-Token": csrf_t1},
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 400
     )
-    # A supervisor may assign themselves as supervisors of a learner
+    # Any valid ausbildner/admin -> lernender pair may be assigned
     # (product decision), and the pair is unique in the database.
     res = client.post(
         "/api/user/relation",
         json={"supervisor": trainer2["id"], "student": student2["id"]},
-        headers={"X-CSRF-Token": csrf_t1},
+        headers={"X-CSRF-Token": csrf_admin},
     )
     assert res.status_code == 201
     relation_id = res.get_json()["data"]["id"]
@@ -3103,43 +3220,43 @@ def test_relation_requires_ausbildner_to_lernender_pair(client):
     res_dup = client.post(
         "/api/user/relation",
         json={"supervisor": trainer2["id"], "student": student2["id"]},
-        headers={"X-CSRF-Token": csrf_t1},
+        headers={"X-CSRF-Token": csrf_admin},
     )
     assert res_dup.status_code == 200
     assert res_dup.get_json()["data"]["id"] == relation_id
 
 
-def test_only_owning_supervisor_removes_relation(client):
-    csrf_t1, trainer1 = login(client, "trainer@vektorwerk.ch")
-    users = {
-        u["company_email"]: u
-        for u in client.get("/api/user").get_json()["data"]["users"]
-    }
+def test_only_admin_removes_relation(client):
+    # Relations are managed exclusively by the admin; supervisors (even the
+    # party of the pair) cannot sever them. The admin removes any relation.
+    users = _company_user_map(client)
+    trainer1 = users["trainer@vektorwerk.ch"]
     student1 = users["student@vektorwerk.ch"]
 
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
     res = client.post(
         "/api/user/relation",
         json={"supervisor": trainer1["id"], "student": student1["id"]},
-        headers={"X-CSRF-Token": csrf_t1},
+        headers={"X-CSRF-Token": csrf_admin},
     )
     assert res.status_code in {200, 201}
     relation_id = res.get_json()["data"]["id"]
 
-    # Another supervisor (not party to the pair) may not sever it.
-    csrf_t2, _ = login(client, "trainer2@vektorwerk.ch")
-    assert (
-        client.delete(
-            f"/api/user/relation/{relation_id}",
-            headers={"X-CSRF-Token": csrf_t2},
-        ).status_code
-        == 403
-    )
-
+    # A supervisor — even a party of the pair — may not sever it.
     csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
     assert (
         client.delete(
             f"/api/user/relation/{relation_id}",
             headers={"X-CSRF-Token": csrf_t1},
+        ).status_code
+        == 403
+    )
+
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
+    assert (
+        client.delete(
+            f"/api/user/relation/{relation_id}",
+            headers={"X-CSRF-Token": csrf_admin},
         ).status_code
         == 200
     )
@@ -3217,28 +3334,36 @@ def test_login_company_hint_scopes_identity(client):
 
 
 def test_role_elevation_requires_explicit_confirmation(client):
-    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
-    users = {
-        u["company_email"]: u
-        for u in client.get("/api/user").get_json()["data"]["users"]
-    }
+    users = _company_user_map(client)
+    trainer1 = users["trainer@vektorwerk.ch"]
     student1 = users["student@vektorwerk.ch"]
 
-    # Without explicit confirmation, promotion is rejected.
+    # A supervisor can no longer change roles — not even self-promotion.
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
     assert (
         client.put(
             f"/api/user/{student1['id']}",
-            json={"role": "ausbildner"},
+            json={"role": "ausbildner", "confirm_role_elevation": True},
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
         == 403
     )
-    # With explicit confirmation, the documented peer-supervisor model
-    # allows the promotion.
+
+    # Roles are changed exclusively by admins — and only with an explicit
+    # confirmation flag.
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
+    res = client.put(
+        f"/api/user/{student1['id']}",
+        json={"role": "ausbildner"},
+        headers={"X-CSRF-Token": csrf_admin},
+    )
+    assert res.status_code == 403
+    assert "confirm_role_elevation" in res.get_json()["error"]
+
     res = client.put(
         f"/api/user/{student1['id']}",
         json={"role": "ausbildner", "confirm_role_elevation": True},
-        headers={"X-CSRF-Token": csrf_t1},
+        headers={"X-CSRF-Token": csrf_admin},
     )
     assert res.status_code == 200
     assert res.get_json()["data"]["role"] == "ausbildner"

@@ -149,7 +149,7 @@ def create_evaluation():
 def save_project_evaluation(project_id):
     """Save global evaluation text, per-student evaluations (project, tasks, goals), release flag, and completion status."""
     actor = get_current_user()
-    if actor.role != "ausbildner":
+    if actor.role not in ("ausbildner", "admin"):
         return jsonify(
             {"error": "Auswertungen können nur von Ausbildner/innen gespeichert werden."}
         ), 403

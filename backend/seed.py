@@ -857,8 +857,10 @@ def _seed_company_data(company):
         job_title="Berufsbildner",
     )
 
+    # Sandra is the company administrator: user/relationship management is
+    # exclusively hers; visibility rules stay the same as a supervisor's.
     hr_user = User(
-        role="ausbildner",
+        role="admin",
         name="Sandra",
         surname="Meier",
         company_id=company.id,
@@ -872,7 +874,7 @@ def _seed_company_data(company):
         company_address="Industriestrasse 40, 8404 Winterthur",
         company_email="sandra.meier@vektorwerk.ch",
         company_phone="+41 52 500 10 02",
-        job_title="HR / Rekrutierung",
+        job_title="Administrator",
     )
 
     fach_user = User(

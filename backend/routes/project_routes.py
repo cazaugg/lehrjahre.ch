@@ -5,6 +5,7 @@ from backend.models import db, Project, Participation, Eval, User, Documents
 from backend.auth import login_required, role_required, get_current_user
 from backend.audit import audit
 from backend.policies import (
+    is_supervisor,
     visible_project_ids_for,
     can_view_project,
     can_manage_project,
@@ -109,7 +110,7 @@ def _validated_project_document(actor: User, raw_doc_id, current_doc_id=None):
 
 
 def student_can_view_project(actor: User, root_project: Project) -> bool:
-    if actor.role == "ausbildner":
+    if is_supervisor(actor):
         return True
     if not (root_project.is_published or root_project.planning_released):
         return False
@@ -353,7 +354,7 @@ def get_project(project_id):
 
 
 @bp.route("", methods=["POST"])
-@role_required("ausbildner")
+@role_required("ausbildner", "admin")
 def create_project():
     actor = get_current_user()
     data = request.get_json(silent=True) or {}
@@ -441,7 +442,7 @@ def create_project():
 
 
 @bp.route("/<int:project_id>", methods=["PUT"])
-@role_required("ausbildner")
+@role_required("ausbildner", "admin")
 def update_project(project_id):
     actor = get_current_user()
     project = db.session.get(Project, project_id)
@@ -553,7 +554,7 @@ def update_project(project_id):
 
 
 @bp.route("/<int:project_id>", methods=["DELETE"])
-@role_required("ausbildner")
+@role_required("ausbildner", "admin")
 def delete_project(project_id):
     actor = get_current_user()
     project = db.session.get(Project, project_id)

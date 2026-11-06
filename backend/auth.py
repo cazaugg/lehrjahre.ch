@@ -142,8 +142,8 @@ def role_required(*roles):
 
 
 def is_admin_or_hr(user: User) -> bool:
-    """All supervisors (ausbildner) have uniform supervisor permissions."""
-    return bool(user and user.role == "ausbildner")
+    """All supervisors (ausbildner and admin) have uniform supervisor permissions."""
+    return bool(user and user.role in ("ausbildner", "admin"))
 
 
 def can_access_student(actor: User, student_id: int) -> bool:

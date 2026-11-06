@@ -55,7 +55,7 @@ const newSupervisorId = ref('')
 const addSupervisorSelect = ref({})
 
 const supervisors = computed(() =>
-  allUsers.value.filter((u) => u.role === 'ausbildner')
+  allUsers.value.filter((u) => u.role === 'ausbildner' || u.role === 'admin')
 )
 
 const people = computed(() =>
@@ -84,6 +84,34 @@ function studentsForSupervisor(supId) {
   return relations.value.filter((r) => r.supervisor === supId)
 }
 
+const ROLE_LABELS = {
+  admin: 'Administrator/in',
+  ausbildner: 'Ausbildner/in',
+  lernender: 'Lernende/r'
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role
+}
+
+function roleBadgeClass(role) {
+  if (role === 'admin') return 'badge-warning'
+  if (role === 'ausbildner') return 'badge-info'
+  return 'badge-success'
+}
+
+function isSupervisorRole(role) {
+  return role === 'ausbildner' || role === 'admin'
+}
+
+const createUserTitle = computed(() =>
+  newRole.value === 'lernender'
+    ? 'Neue/n Lernende/n erfassen'
+    : newRole.value === 'admin'
+      ? 'Neue/n Administrator/in erfassen'
+      : 'Neue/n Ausbildner/in erfassen'
+)
+
 function toggleExpand(userId) {
   expandedIds.value[userId] = !expandedIds.value[userId]
 }
@@ -111,7 +139,9 @@ function openCreateUser(role = 'lernender') {
   newJobTitle.value =
     role === 'lernender'
       ? auth.memProfessions[4] || auth.memProfessions[0] || 'Polymechanikerin / Polymechaniker EFZ'
-      : auth.trainerFunctions[1] || 'Berufsbildner'
+      : role === 'admin'
+        ? 'Administrator'
+        : auth.trainerFunctions[1] || 'Berufsbildner'
   newStartDate.value = role === 'lernender' ? '2026-08-10' : ''
   newEndDate.value = role === 'lernender' ? '2030-07-31' : ''
   newPassword.value = ''
@@ -220,7 +250,7 @@ function formatDate(d) {
           Ausbildner, Vorgesetzte und Lernende im Betrieb – zum Aufklappen anklicken
         </p>
       </div>
-      <div v-if="auth.isAdminOrHr" class="flex-gap">
+      <div v-if="auth.isAdmin" class="flex-gap">
         <EditButton
           size="lg"
           show-label
@@ -235,6 +265,13 @@ function formatDate(d) {
           variant="primary"
           label="Lernende/n erfassen"
           @click="openCreateUser('lernender')"
+        />
+        <EditButton
+          size="lg"
+          show-label
+          icon="user-plus"
+          label="Administrator/in erfassen"
+          @click="openCreateUser('admin')"
         />
       </div>
     </div>
@@ -253,6 +290,7 @@ function formatDate(d) {
       <select v-model="filterRole" class="form-control filter-select">
         <option value="">Alle Personen</option>
         <option value="ausbildner">Ausbildner</option>
+        <option value="admin">Administrator</option>
         <option value="lernender">Lernende</option>
       </select>
 
@@ -285,11 +323,8 @@ function formatDate(d) {
             <div>
               <div class="flex-gap">
                 <strong>{{ person.full_name }}</strong>
-                <span
-                  class="badge"
-                  :class="person.role === 'ausbildner' ? 'badge-info' : 'badge-success'"
-                >
-                  {{ person.role === 'ausbildner' ? 'Ausbildner/in' : 'Lernende/r' }}
+                <span class="badge" :class="roleBadgeClass(person.role)">
+                  {{ roleLabel(person.role) }}
                 </span>
                 <span class="text-muted">{{ person.job_title }}</span>
               </div>
@@ -305,7 +340,7 @@ function formatDate(d) {
           </div>
 
           <div class="flex-gap" @click.stop>
-            <span v-if="person.role === 'ausbildner'" class="badge badge-success">
+            <span v-if="isSupervisorRole(person.role)" class="badge badge-success">
               {{ studentsForSupervisor(person.id).length }} betreute Lernende
             </span>
             <span v-else class="badge badge-info">
@@ -321,8 +356,8 @@ function formatDate(d) {
         </div>
 
         <div v-if="expandedIds[person.id]" class="collapsible-body">
-          <!-- Ausbildner -->
-          <template v-if="person.role === 'ausbildner'">
+          <!-- Ausbildner / Administrator -->
+          <template v-if="isSupervisorRole(person.role)">
             <form
               v-if="editingPersonId === person.id"
               @submit.prevent="saveApprenticeProfile"
@@ -633,7 +668,7 @@ function formatDate(d) {
                     }})
                   </span>
                   <EditButton
-                    v-if="auth.isTrainer"
+                    v-if="auth.isAdmin"
                     label="Zuweisung entfernen"
                     icon="delete"
                     variant="danger"
@@ -642,7 +677,7 @@ function formatDate(d) {
                 </div>
               </div>
 
-              <div v-if="auth.isTrainer" class="flex-gap">
+              <div v-if="auth.isAdmin" class="flex-gap">
                 <select
                   v-model="addSupervisorSelect[person.id]"
                   class="form-control"
@@ -676,11 +711,7 @@ function formatDate(d) {
     <!-- Modal: Create New User -->
     <ModalDialog
       :show="showUserModal"
-      :title="
-        newRole === 'lernender'
-          ? 'Neue/n Lernende/n erfassen'
-          : 'Neue/n Ausbildner/in erfassen'
-      "
+      :title="createUserTitle"
       @close="showUserModal = false"
     >
       <form @submit.prevent="createUser">

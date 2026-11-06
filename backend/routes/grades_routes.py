@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 from backend.models import db, Grades
 from backend.auth import login_required, get_current_user, can_access_student
 from backend.audit import audit
-from backend.policies import is_student, supervised_student_ids
+from backend.policies import is_student, is_supervisor, supervised_student_ids
 from backend.validation import parse_int, parse_str
 
 
@@ -76,7 +76,7 @@ def create_grade():
     if not (1.0 <= grade_float <= 6.0):
         return jsonify({"error": "Die Note muss zwischen 1.0 und 6.0 liegen."}), 400
 
-    if actor.role == "ausbildner":
+    if is_supervisor(actor):
         if data.get("student") in (None, ""):
             return jsonify({"error": "Lernende/r muss angegeben werden."}), 400
         student_id = parse_int(data.get("student"), "Lernende/r", min_value=1)

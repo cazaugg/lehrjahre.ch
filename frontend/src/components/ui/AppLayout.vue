@@ -154,7 +154,7 @@ async function handleLogout() {
       <header class="topbar">
         <div class="topbar-info">
           <span class="badge" :class="auth.isTrainer ? 'badge-info' : 'badge-success'">
-            {{ auth.isTrainer ? 'Ausbildner' : 'Lernende/r' }}
+            {{ auth.isAdmin ? 'Administrator' : (auth.isTrainer ? 'Ausbildner' : 'Lernende/r') }}
           </span>
           <span class="text-muted">{{ auth.user?.company }}</span>
         </div>

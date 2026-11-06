@@ -2,7 +2,9 @@
 
 ## Unreleased
 
+- **Roles:** Added an `admin` role ("Administrator"). Admins manage people and relationships exclusively (create/delete users, edit any contacts/master data in the company, manage all supervisor assignments, and perform any role change — including `confirm_role_elevation`), and can view private contacts of everyone in the company. Supervisors (`ausbildner`) lose these capabilities but keep everything else (including visibility rules and self-editing). Demo seed data includes an admin user (Sandra Meier).
 - **Seed data:** Rebuilt the demo projects around the Konstrukteur/in EFZ Lehrplan: three Konstrukteur students (1st–3rd year, projects in `backend/seed.py` quote Lernziele from `data/lehrplan/lehrplan_KR.json` verbatim in their goals), replacing the previous mixed-job demo data.
+- **Multi-tenancy:** Every company now owns its own SQLite database (`data/<company-slug>/app.db`) containing all its data, including user credentials. A global control database (`data/control.db`) holds only the company registry and the login email → company routing index. Deleted: the old single `data/lehrjahre.db`.
 
 - **Backend:** Added a `company` table and moved users from the free-text `company` column to a mandatory `company_id` foreign key. Company membership cannot be changed through the API.
 - **Backend:** Enforced that a user's `company_email` matches the company's `email_domain`. New users inherit the company address when none is supplied.

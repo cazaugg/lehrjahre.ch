@@ -12,9 +12,12 @@ export const useAuthStore = defineStore('auth', () => {
   const selectedStudentId = ref(null)
   const companyStudents = ref([])
 
-  const isTrainer = computed(() => user.value?.role === 'ausbildner')
+  // Supervisors (ausbildner and admin) share the same visibility rules; the
+  // admin additionally manages people and relationships company-wide.
+  const isTrainer = computed(() => ['ausbildner', 'admin'].includes(user.value?.role))
   const isStudent = computed(() => user.value?.role === 'lernender')
-  const isAdminOrHr = computed(() => user.value?.role === 'ausbildner')
+  const isAdmin = computed(() => user.value?.role === 'admin')
+  const isAdminOrHr = isTrainer
 
   function isSubordinate(studentId) {
     if (!isTrainer.value || !studentId) return false
@@ -43,7 +46,7 @@ export const useAuthStore = defineStore('auth', () => {
       memProfessions.value = data.mem_professions || []
       trainerFunctions.value = data.trainer_functions || []
 
-      if (user.value && user.value.role === 'ausbildner') {
+      if (isTrainer.value) {
         await loadCompanyStudents()
       } else if (user.value) {
         selectedStudentId.value = user.value.id
@@ -60,7 +63,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await apiFetch('/api/user?role=lernender&subordinate_only=true')
       companyStudents.value = res.users || []
-      if (user.value && user.value.role === 'ausbildner') {
+      if (isTrainer.value) {
         user.value.supervised_student_ids = companyStudents.value.map((s) => s.id)
       }
       if (!selectedStudentId.value && companyStudents.value.length > 0) {
@@ -81,7 +84,7 @@ export const useAuthStore = defineStore('auth', () => {
     memProfessions.value = data.mem_professions || []
     trainerFunctions.value = data.trainer_functions || []
 
-    if (user.value.role === 'ausbildner') {
+    if (isTrainer.value) {
       await loadCompanyStudents()
     } else {
       selectedStudentId.value = user.value.id
@@ -107,6 +110,7 @@ export const useAuthStore = defineStore('auth', () => {
     companyStudents,
     isTrainer,
     isStudent,
+    isAdmin,
     isAdminOrHr,
     isSubordinate,
     activeStudentId,

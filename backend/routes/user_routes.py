@@ -15,6 +15,7 @@ from backend.audit import audit
 from backend.storage import delete_stored_file
 from backend.policies import (
     is_supervisor,
+    is_admin,
     supervised_student_ids,
     can_edit_user_contacts,
     can_edit_student_master_data,
@@ -69,7 +70,7 @@ def _validated_relation_pair(supervisor_id: int, student_id: int, actor: User):
         or stu.company_id != actor.company_id
     ):
         return None, None, error
-    if sup.role != "ausbildner" or stu.role != "lernender":
+    if sup.role not in ("ausbildner", "admin") or stu.role != "lernender":
         return None, None, error
     return sup, stu, None
 
@@ -120,7 +121,7 @@ def list_users():
     subordinate_only = request.args.get("subordinate_only") == "true"
 
     query = User.query.filter_by(company_id=actor.company_id)
-    if role_filter in {"lernender", "ausbildner"}:
+    if role_filter in {"lernender", "ausbildner", "admin"}:
         query = query.filter_by(role=role_filter)
     if subordinate_only and is_supervisor(actor):
         query = query.filter(User.id.in_(supervised_student_ids(actor)))
@@ -160,7 +161,7 @@ def get_user(user_id):
 
 
 @bp.route("", methods=["POST"])
-@role_required("ausbildner")
+@role_required("admin")
 def create_user():
     actor = get_current_user()
     company = tenants.current_company()
@@ -168,7 +169,7 @@ def create_user():
     data = request.get_json(silent=True) or {}
     raw_role = parse_str(data.get("role"), "Rolle", default="lernender")
     role = raw_role.lower()
-    if raw_role != role or role not in {"lernender", "ausbildner"}:
+    if raw_role != role or role not in {"lernender", "ausbildner", "admin"}:
         return jsonify({"error": "Ungültige Rolle."}), 400
 
     name = parse_str(data.get("name"), "Vorname")
@@ -254,7 +255,7 @@ def create_user():
         user_id=new_user.id,
         role=role,
         company_id=new_user.company_id,
-        role_elevation=bool(role == "ausbildner"),
+        role_elevation=bool(role in {"ausbildner", "admin"}),
     )
 
     # Optional initial supervisor relation
@@ -361,17 +362,23 @@ def update_user(user_id):
                 target.job_title = job_title
         if "role" in data:
             role = parse_str(data.get("role"), "Rolle")
-            if role == "ausbildner" and target.role != "ausbildner":
-                # Promotion to supervisor stays with the current model (any
-                # supervisor), but it must be an explicit, audit-logged event.
-                # No silent role escalation through master-data edits.
+            if role != target.role:
+                # Role changes (promotion or demotion, even of the actor
+                # themselves) are exclusively an admin capability and must
+                # be an explicit, audit-logged event. No silent role
+                # escalation through master-data edits.
+                if not is_admin(actor):
+                    return jsonify(
+                        {"error": "Rollen können nur von Administratoren geändert werden."}
+                    ), 403
+                if role not in {"lernender", "ausbildner", "admin"}:
+                    return jsonify({"error": "Ungültige Rolle."}), 400
                 if data.get("confirm_role_elevation") is not True:
                     return jsonify(
                         {
-                            "error": "Zum Ausbildner ernennen erfordert confirm_role_elevation=true."
+                            "error": "Rollenänderung erfordert confirm_role_elevation=true."
                         }
                     ), 403
-            if role in {"lernender", "ausbildner"}:
                 target.role = role
         if "company_email" in data and incoming_company_email:
             company = tenants.current_company()
@@ -444,7 +451,7 @@ def update_user(user_id):
 
 
 @bp.route("/<int:user_id>", methods=["DELETE"])
-@role_required("ausbildner")
+@role_required("admin")
 def delete_user(user_id):
     actor = get_current_user()
     if actor.id == user_id:
@@ -486,7 +493,7 @@ def delete_user(user_id):
 
 
 @bp.route("/relation", methods=["POST"])
-@role_required("ausbildner")
+@role_required("admin")
 def add_relation():
     actor = get_current_user()
     data = request.get_json(silent=True) or {}
@@ -519,7 +526,7 @@ def add_relation():
 
 
 @bp.route("/relation/<int:relation_id>", methods=["DELETE"])
-@role_required("ausbildner")
+@role_required("admin")
 def remove_relation(relation_id):
     actor = get_current_user()
     rel = db.session.get(UserRelation, relation_id)
@@ -530,12 +537,7 @@ def remove_relation(relation_id):
     sup = db.session.get(User, rel.supervisor)
     if not stu or not sup or stu.company_id != actor.company_id or sup.company_id != actor.company_id:
         return jsonify({"error": "Keine Berechtigung."}), 403
-    if sup.role != "ausbildner" or stu.role != "lernender":
-        return jsonify({"error": "Keine Berechtigung."}), 403
-
-    # A supervisor may only remove their own assignments. Supervisors who are
-    # not party to the pair keep their access, but may not sever it.
-    if rel.supervisor != actor.id:
+    if sup.role not in ("ausbildner", "admin") or stu.role != "lernender":
         return jsonify({"error": "Keine Berechtigung."}), 403
 
     supervisor_id = rel.supervisor
