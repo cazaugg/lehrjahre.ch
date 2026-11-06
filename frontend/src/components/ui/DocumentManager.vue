@@ -6,6 +6,9 @@ import ModalDialog from './ModalDialog.vue'
 import MarkdownEditor from './MarkdownEditor.vue'
 import DocumentViewer from './DocumentViewer.vue'
 import EditButton from './EditButton.vue'
+import LehrplanGoalPicker from './LehrplanGoalPicker.vue'
+import LernzielLabel from './LernzielLabel.vue'
+import { jobCodeForProfession } from '../../utils/lehrplanJobs'
 import { getDocumentDownloadUrl } from '../../utils/documents'
 
 const props = defineProps({
@@ -63,7 +66,12 @@ function canEditDoc(doc) {
   if (!doc) return false
   if (doc.is_template) return auth.isTrainer
   if (doc.type === 'lernjournal') {
-    return auth.isStudent && doc.owner === auth.user?.id
+    // Der Lernende bearbeitet seinen Eintrag; Vorgesetzte dürfen wenigstens
+    // die Lernziele pflegen (nur-Ziel-Bearbeitung im Editor).
+    return (
+      (auth.isStudent && doc.owner === auth.user?.id) ||
+      (auth.isTrainer && auth.isSubordinate(doc.owner))
+    )
   }
   if (['ausbildungsgespraech', 'vertrag', 'bewerbung'].includes(doc.type)) {
     return auth.isTrainer
@@ -72,6 +80,14 @@ function canEditDoc(doc) {
     return auth.isTrainer || doc.owner === auth.user?.id
   }
   return auth.isTrainer || doc.owner === auth.user?.id
+}
+
+/** «Abgeschlossen» am Lernjournal darf nur der Lernende schalten. */
+function canToggleDone(doc) {
+  if (doc?.type === 'lernjournal') {
+    return auth.isStudent && doc.owner === auth.user?.id
+  }
+  return canEditDoc(doc)
 }
 
 function canDeleteDoc(doc) {
@@ -227,6 +243,65 @@ function isTextDocument(doc) {
   return fn.endsWith('.md') || fn.endsWith('.txt')
 }
 
+// ---- Lernziele am Lernjournal-Eintrag --------------------------------------------
+const formGoals = ref([])
+const newGoalText = ref('')
+const showGoalPicker = ref(false)
+
+const goalEditingDoc = computed(() =>
+  editingDoc.value && editingDoc.value.type === 'lernjournal' && !editingDoc.value.is_template
+)
+
+function canEditGoals(doc) {
+  if (!doc || doc.type !== 'lernjournal' || doc.is_template) return false
+  if (auth.isStudent) return doc.owner === auth.user?.id
+  if (auth.isTrainer) return auth.isSubordinate(doc.owner)
+  return false
+}
+
+// Vorgesetzte/r: bearbeitet nur die Ziele, der Eintrag selbst bleibt gesperrt.
+const isGoalOnlyEdit = computed(() => {
+  if (!goalEditingDoc.value) return false
+  return auth.isTrainer
+})
+
+/** Ziele-Pflege im Editor für lernjournal-Einträge. */
+const showGoalFields = computed(() => {
+  const t = editingDoc.value?.type || formType.value
+  if (t !== 'lernjournal') return false
+  if (editingDoc.value) return canEditGoals(editingDoc.value)
+  if (auth.isStudent) return true
+  if (auth.isTrainer) return auth.isSubordinate(Number(formOwner.value))
+  return false
+})
+
+function applyPickedGoals(picked) {
+  for (const item of picked || []) {
+    if (item?.id && !formGoals.value.includes(item.id)) {
+      formGoals.value.push(item.id)
+    }
+  }
+}
+
+function addGoal() {
+  const g = (newGoalText.value || '').trim()
+  if (g && !formGoals.value.includes(g)) formGoals.value.push(g)
+  newGoalText.value = ''
+}
+
+function removeGoal(idx) {
+  formGoals.value.splice(idx, 1)
+}
+
+/** Berufsvorauswahl für den Lernziel-Picker: Beruf des Eigentümers. */
+const defaultGoalJobCode = computed(() => {
+  const ownerUser =
+    auth.isStudent && (!editingDoc.value || editingDoc.value.owner === auth.user?.id)
+      ? auth.user
+      : auth.companyStudents.find((s) => s.id === Number(formOwner.value))
+  return jobCodeForProfession(ownerUser?.job_title || '')
+})
+
 function toggleExpand(id) {
   expandedIds.value[id] = !expandedIds.value[id]
 }
@@ -295,6 +370,8 @@ function openCreate(initialMode = null, fromTemplate = null) {
   formIsDone.value = false
   formIsTemplate.value = false
   selectedFile.value = null
+  formGoals.value = []
+  newGoalText.value = ''
   showModal.value = true
 }
 
@@ -310,6 +387,8 @@ function openEdit(doc) {
   formIsDone.value = doc.is_done
   formIsTemplate.value = doc.is_template
   selectedFile.value = null
+  formGoals.value = [...(doc.goals || [])]
+  newGoalText.value = ''
   showModal.value = true
 }
 
@@ -330,20 +409,35 @@ async function saveDocument() {
   try {
     const ownerToSave = Number(formOwner.value || auth.user?.id)
     if (editingDoc.value) {
-      const payload = {
-        name: formName.value,
-        description: formDescription.value,
-        is_done: formIsDone.value,
-        is_template: formIsTemplate.value
+      // Vorgesetzte/r am Lernjournal: nur die Lernziele speichern – der
+      // Eintrag selbst bleibt gesperrt (der Backend-Pfad erzwingt dies).
+      if (isGoalOnlyEdit.value) {
+        await apiFetch(`/api/documents/${editingDoc.value.id}`, {
+          method: 'PUT',
+          body: { goals: formGoals.value }
+        })
+        expandedIds.value[editingDoc.value.id] = true
+      } else {
+        const payload = {
+          name: formName.value,
+          description: formDescription.value,
+          is_done: formIsDone.value,
+          is_template: formIsTemplate.value
+        }
+        if (
+          (editingDoc.value.type || formType.value) === 'lernjournal'
+        ) {
+          payload.goals = formGoals.value
+        }
+        if (mode.value === 'text') {
+          payload.content = formContent.value
+        }
+        await apiFetch(`/api/documents/${editingDoc.value.id}`, {
+          method: 'PUT',
+          body: payload
+        })
+        expandedIds.value[editingDoc.value.id] = true
       }
-      if (mode.value === 'text') {
-        payload.content = formContent.value
-      }
-      await apiFetch(`/api/documents/${editingDoc.value.id}`, {
-        method: 'PUT',
-        body: payload
-      })
-      expandedIds.value[editingDoc.value.id] = true
     } else if (mode.value === 'file') {
       if (!selectedFile.value) {
         error.value = 'Bitte wählen Sie eine Datei zum Hochladen aus.'
@@ -373,7 +467,8 @@ async function saveDocument() {
           type: formType.value,
           owner: ownerToSave,
           is_done: formIsDone.value,
-          is_template: formIsTemplate.value
+          is_template: formIsTemplate.value,
+          goals: formGoals.value
         }
       })
       expandedIds.value[created.id] = true
@@ -432,12 +527,12 @@ function formatDate(iso) {
         </div>
 
         <div class="editor-header-actions">
-          <label class="editor-toggle-pill">
+          <label v-if="!isGoalOnlyEdit" class="editor-toggle-pill">
             <input v-model="formIsDone" type="checkbox" />
             <span>Abgeschlossen / visiert</span>
           </label>
           <label
-            v-if="auth.isTrainer && allowTemplates"
+            v-if="!isGoalOnlyEdit && auth.isTrainer && allowTemplates"
             class="editor-toggle-pill"
           >
             <input v-model="formIsTemplate" type="checkbox" />
@@ -454,6 +549,10 @@ function formatDate(iso) {
 
       <div v-if="error" class="alert alert-error">{{ error }}</div>
 
+      <div v-if="isGoalOnlyEdit" class="alert alert-info editor-goal-note">
+        Als Vorgesetzte/r bearbeiten Sie nur die Lernziele dieses Eintrags; den Lernjournal-Text kann nur der/die Lernende ändern.
+      </div>
+
       <div class="editor-card">
         <div class="editor-meta-bar">
           <div class="editor-meta-grid">
@@ -463,6 +562,7 @@ function formatDate(iso) {
                 v-model="formName"
                 type="text"
                 class="form-control"
+                :disabled="isGoalOnlyEdit"
                 placeholder="z.B. Lernjournal KW 45 – Fräsen & Messtechnik"
                 required
               />
@@ -474,6 +574,7 @@ function formatDate(iso) {
                 v-model="formDescription"
                 type="text"
                 class="form-control"
+                :disabled="isGoalOnlyEdit"
                 placeholder="Kurze Zusammenfassung oder Zeitraum..."
               />
             </div>
@@ -498,16 +599,57 @@ function formatDate(iso) {
                 </option>
               </select>
             </div>
+
+            <!-- Lernziele am Lernjournal-Eintrag -->
+            <div v-if="showGoalFields" class="form-group form-group-wide">
+              <label class="form-label">Lernziele</label>
+
+              <div class="goal-list-display">
+                <span
+                  v-for="(g, idx) in formGoals"
+                  :key="g + idx"
+                  class="goal-chip"
+                >
+                  <LernzielLabel :goal="g" />
+                  <button
+                    type="button"
+                    class="goal-chip-remove"
+                    title="Lernziel entfernen"
+                    @click="removeGoal(idx)"
+                  >✕</button>
+                </span>
+                <span v-if="formGoals.length === 0" class="text-muted">Noch keine Lernziele erfasst.</span>
+              </div>
+
+              <div class="flex-gap" style="margin-top: var(--space-2)">
+                <input
+                  v-model="newGoalText"
+                  type="text"
+                  class="form-control goal-add-input"
+                  placeholder="Neues Lernziel eingeben..."
+                  @keydown.enter.prevent="addGoal"
+                />
+                <button type="button" class="btn btn-sm" @click="addGoal">+ Hinzufügen</button>
+                <button type="button" class="btn btn-sm" @click="showGoalPicker = true">
+                  + Lernziel aus Lehrplan wählen
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
-        <MarkdownEditor
-          v-model="formContent"
-          :full-page="true"
-          :owner-id="Number(formOwner || auth.user?.id)"
-          :is-template="formIsTemplate"
-          placeholder="Schreiben Sie hier Ihren Bericht, Ihr Protokoll oder Ihren Lernjournaleintrag..."
-        />
+        <template v-if="!isGoalOnlyEdit">
+          <MarkdownEditor
+            v-model="formContent"
+            :full-page="true"
+            :owner-id="Number(formOwner || auth.user?.id)"
+            :is-template="formIsTemplate"
+            placeholder="Schreiben Sie hier Ihren Bericht, Ihr Protokoll oder Ihren Lernjournaleintrag..."
+          />
+        </template>
+        <div v-else class="goal-only-content">
+          {{ formContent }}
+        </div>
       </div>
     </form>
 
@@ -640,7 +782,7 @@ function formatDate(iso) {
                 @click="startEditFeedback(doc)"
               />
               <EditButton
-                v-if="canEditDoc(doc)"
+                v-if="canToggleDone(doc)"
                 :label="doc.is_done ? 'Als offen markieren' : 'Abschliessen'"
                 :icon="doc.is_done ? 'undo' : 'check'"
                 :variant="doc.is_done ? 'default' : 'success'"
@@ -867,6 +1009,16 @@ function formatDate(iso) {
         </div>
       </ModalDialog>
     </div>
+
+    <!-- Lernziel-Picker (Lernjournal): auserhalb der Listen-Sicht, damit er
+         auch aus dem Vollbild-Editor heraus geöffnet werden kann. -->
+    <LehrplanGoalPicker
+      :show="showGoalPicker"
+      :default-job-code="defaultGoalJobCode"
+      :existing="formGoals"
+      @confirm="applyPickedGoals"
+      @close="showGoalPicker = false"
+    />
   </div>
 </template>
 
@@ -874,6 +1026,62 @@ function formatDate(iso) {
 .badge-type {
   background: var(--color-primary-soft);
   color: var(--color-primary);
+}
+
+/* Lernziele-Pflege im Lernjournal-Editor */
+.form-group-wide {
+  grid-column: 1 / -1;
+}
+
+.goal-list-display {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.goal-chip {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.6rem;
+}
+
+.goal-chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--color-text-light);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 2px 0 0;
+}
+
+.goal-chip-remove:hover {
+  color: var(--color-danger, #a33);
+}
+
+.goal-add-input {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.editor-goal-note {
+  margin-bottom: var(--space-2);
+}
+
+.goal-only-content {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  max-height: 45vh;
+  overflow: auto;
 }
 
 .template-list {

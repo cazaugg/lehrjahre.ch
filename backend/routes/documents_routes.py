@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, send_file
 from backend.models import db, Documents, Participation, User
@@ -47,6 +48,19 @@ def project_document_is_released(doc):
         Participation.query.filter_by(document_id=doc.id, is_done=True).first()
         is not None
     )
+
+
+def serialize_goals(goals_input) -> str:
+    """Store goal strings as a JSON list (same format as Project.goals)."""
+    if goals_input is None:
+        return "[]"
+    if isinstance(goals_input, list):
+        cleaned = [str(g).strip() for g in goals_input if str(g).strip()]
+        return json.dumps(cleaned, ensure_ascii=False)
+    if isinstance(goals_input, str):
+        lines = [line.strip() for line in goals_input.splitlines() if line.strip()]
+        return json.dumps(lines, ensure_ascii=False)
+    return "[]"
 
 
 @bp.route("", methods=["GET"])
@@ -165,6 +179,7 @@ def create_document():
         is_done = parse_bool(data.get("is_done"), "Abgeschlossen")
         text_content = parse_str(data.get("content"), "Inhalt", allow_none=True)
         feedback = parse_str(data.get("feedback"), "Rückmeldung")
+        goals_input = data.get("goals")
 
     if doc_type not in VALID_TYPES:
         doc_type = "sonstiges"
@@ -215,6 +230,7 @@ def create_document():
         is_template=is_template,
         updated_date=datetime.now(timezone.utc),
         is_done=is_done,
+        goals=serialize_goals(goals_input if doc_type == "lernjournal" else None),
         feedback=feedback if is_supervisor(actor) else "",
         feedback_author=(
             actor.id if is_supervisor(actor) and feedback else None
@@ -302,14 +318,20 @@ def update_document(doc_id):
                     != bool(doc.is_done)
                 )
             )
-            if has_entry_changes or "feedback" not in data:
+            # Vorgesetzte dürfen zusätzlich die Lernziele pflegen.
+            if has_entry_changes or (
+                "feedback" not in data and "goals" not in data
+            ):
                 return jsonify(
                     {
                         "error": "Der Lernjournal-Eintrag selbst kann nur vom Lernenden bearbeitet werden."
                     }
                 ), 403
-            doc.feedback = parse_str(data.get("feedback"), "Rückmeldung")
-            doc.feedback_author = actor.id if doc.feedback else None
+            if "goals" in data:
+                doc.goals = serialize_goals(data.get("goals"))
+            if "feedback" in data:
+                doc.feedback = parse_str(data.get("feedback"), "Rückmeldung")
+                doc.feedback_author = actor.id if doc.feedback else None
             doc.updated_date = datetime.now(timezone.utc)
             db.session.commit()
             audit(
@@ -351,6 +373,8 @@ def update_document(doc_id):
         doc.description = parse_str(data.get("description"), "Beschreibung")
     if "is_done" in data:
         doc.is_done = parse_bool(data.get("is_done"), "Abgeschlossen")
+    if doc.type == "lernjournal" and "goals" in data:
+        doc.goals = serialize_goals(data.get("goals"))
     if is_supervisor(actor) and "is_template" in data:
         doc.is_template = new_template
     if is_supervisor(actor) and "feedback" in data:
