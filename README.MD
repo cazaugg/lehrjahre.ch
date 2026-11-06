@@ -14,12 +14,15 @@ Digitale Lerndokumentation für MEM Berufslehren in der Schweiz.
 ## Architecture & Design Choices
 
 - **Authentication & Security:** Signed Flask sessions with `HttpOnly`, `SameSite=Lax`, and `Secure` cookies by default, Argon2id password hashing (`argon2-cffi`), per-user session versioning for password-change/logout-all revocation, and `X-CSRF-Token` validation on all state-changing API calls. Configured with `ProxyFix` for deployment behind a reverse proxy and WAF.
-- **Database (`data/lehrjahre.db`):** SQLite via SQLAlchemy using the 9 core tables (`company`, `user`, `user_relation`, `project`, `participation`, `eval`, `grades`, `documents`, `knowledge`).
-  - `company` stores the tenant name, its email domain, and the default company address.
-  - Every `user` belongs to exactly one `company` via `company_id`; the company cannot be changed through the API. A user's `company_email` must match the company's `email_domain`. New users inherit `company.address` when no company address is supplied.
+- **Per-Company Databases (one SQLite file per tenant):** Each company owns its own database and data folder. The global *control database* (`data/control.db`) holds only the routing layer:
+  - `company` is the tenant registry (name, email domain, default address) used to resolve a login to the correct company database.
+  - `user_routing` maps a login email address to a user *inside* a company database — no credentials, no profile data.
+  - A company's folder `<company root>/<company-slug>/` contains `app.db` (its full database) and `documents/`. `app.db` holds every operational table (`user`, `user_relation`, `project`, `participation`, `eval`, `grades`, `documents`, `knowledge`) including complete user records (password hash, contacts, session version) — nothing about other companies exists in it.
+  - The SQLAlchemy session routes each statement to the control engine or the active tenant engine (`backend/tenants.py`); the tenant is resolved per request from the signed session cookie.
+- **Users & Companies:** Every `user` belongs to exactly one `company` (assignment is fixed once created — the company cannot be changed through the API). A user's `company_email` must match the company's `email_domain`. New users inherit `company.address` when no company address is supplied, and the login email must stay globally unique (`user_routing`).
   - `user.role` distinguishes `'ausbildner'` and `'lernender'`, while `user.job_title` stores either the trainer function (`Administrator`, `Berufsbildner`, `Fachvorgesetzter`, `Kursleiter`, `Lehrer`, `HR / Rekrutierung`) or the apprentice's MEM profession.
   - `knowledge` models the `Thema -> Seite` hierarchy (`parent_id`) and links via `document_id` to `documents`.
-- **Company-Scoped File Storage (`data/documents/<company-slug>/`):** Uploaded files (PDFs, images, certificates) and Markdown/text documents (`lernjournal`, `wissen`, `ausbildungsgespraech`, `vertrag`) are stored on disk per company and served through `/api/documents/<id>/file` with strict path-traversal protection.
+- **Company-Scoped File Storage (`<company root>/<company-slug>/documents/`):** Uploaded files (PDFs, images, certificates) and Markdown/text documents (`lernjournal`, `wissen`, `ausbildungsgespraech`, `vertrag`) are stored on disk per company next to its `app.db` and served through `/api/documents/<id>/file` with strict path-traversal protection.
 
 ## Quickstart
 
@@ -43,7 +46,7 @@ npm run seed
 
 (`npm run seed` runs `backend.seed` with the development environment and a local secret.)
 
-Create another company (tenant) before adding its users:
+Create another company (tenant) — this also creates its data folder with an empty `app.db` and `documents/` — before adding its users:
 
 ```bash
 LEHRJAHRE_ENV=development uv run python -m backend.companies add "Muster AG" "muster.ch" --address "Musterstrasse 1, 8000 Zürich"
@@ -106,7 +109,7 @@ location / {
 - Keep `COOKIE_SECURE=true` when the site is served over HTTPS. Set it to `false` only for local HTTP development (`npm run dev` does this automatically).
 - The reverse proxy must strip incoming `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` headers and set them itself. `ProxyFix` trusts one proxy hop.
 - Do not run `backend.seed` in production; demo accounts and the shared demo password are development-only.
-- Keep `data/` and `data/documents/` readable only by the API process user (the app creates them with `0750`/`0640`, but verify after deployment).
+- Keep the company data root (`data/` — containing `control.db` and each company folder with `app.db` + `documents/`) readable only by the API process user (the app creates the folders with `0750` and the databases/files with `0640`, but verify after deployment).
 - Collect the API process logs. Security-relevant audit entries are written at `INFO` level.
 
 ## API Endpoints

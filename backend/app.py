@@ -3,8 +3,9 @@ import os
 import secrets
 from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
-from backend.config import Config, DATA_DIR, DOCUMENTS_DIR, INSECURE_DEFAULT_SECRET
-from backend.models import db, ensure_schema_columns
+from backend.config import Config, DATA_DIR, INSECURE_DEFAULT_SECRET
+from backend.models import db
+from backend import tenants
 from backend.auth import verify_csrf
 from backend.validation import ValidationError
 from backend.routes.auth_routes import bp as auth_bp
@@ -57,14 +58,25 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     app.logger.setLevel(logging.INFO)
 
     os.makedirs(DATA_DIR, mode=0o750, exist_ok=True)
-    os.makedirs(app.config["DOCUMENTS_ROOT"], mode=0o750, exist_ok=True)
-    for directory in (DATA_DIR, app.config["DOCUMENTS_ROOT"]):
+    os.makedirs(app.config["COMPANY_ROOT"], mode=0o750, exist_ok=True)
+    for directory in (DATA_DIR, app.config["COMPANY_ROOT"]):
         try:
             os.chmod(directory, 0o750)
         except OSError:
             pass
 
     db.init_app(app)
+
+    # The tenant context is set per request by auth.get_current_user; clear
+    # any leftover context before (and after) every request so a reused
+    # thread can never operate on the wrong company database.
+    @app.before_request
+    def clear_tenant_context():
+        tenants.clear_tenant_company()
+
+    @app.teardown_request
+    def cleanup_tenant_context(_error):
+        tenants.clear_tenant_company()
 
     @app.before_request
     def check_csrf():
@@ -120,8 +132,13 @@ def create_app(config_overrides: dict | None = None) -> Flask:
         return jsonify({"error": "Nicht gefunden."}), 404
 
     with app.app_context():
-        db.create_all()
-        ensure_schema_columns()
+        # Create the control schema (company registry + user routing index).
+        # Company databases are provisioned on demand by tenants.create_company_schema.
+        from backend.models import Company, UserRouting
+
+        db.metadata.create_all(
+            bind=db.engine, tables=[Company.__table__, UserRouting.__table__]
+        )
 
         database_uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
         if database_uri.startswith("sqlite:///"):

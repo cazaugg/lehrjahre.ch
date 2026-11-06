@@ -3,7 +3,8 @@ from functools import wraps
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
 from flask import session, request, jsonify, g
-from backend.models import db, User, UserRelation
+from backend.models import db, Company, User, UserRouting, UserRelation
+from backend import tenants
 
 ph = PasswordHasher()
 DUMMY_PASSWORD_HASH = ph.hash("timing-only-dummy-password")
@@ -59,17 +60,45 @@ def verify_csrf():
     return None
 
 
+def _invalidate():
+    """Clear the session and any tenant context (user unknown/revoked)."""
+    tenants.clear_tenant_company()
+    g.current_user = None
+
+
 def get_current_user() -> User | None:
+    """Load the logged-in user.
+
+    Routing: the signed cookie resolves through the control DB to a company
+    (``company_id``) and the user inside it (``user_id``); the full user
+    record (credentials, session state) is then loaded from that company's
+    own database. Nothing about the user is ever read from the control DB.
+    """
     if hasattr(g, "current_user"):
         return g.current_user
+    tenants.clear_tenant_company()
     user_id = session.get("user_id")
-    if not user_id:
-        g.current_user = None
+    company_id = session.get("company_id")
+    if not user_id or not company_id:
+        _invalidate()
         return None
+
+    company = db.session.get(Company, int(company_id))
+    has_routing = (
+        UserRouting.query.filter_by(company_id=company.id, id=user_id).first()
+        is not None
+    )
+    if not company or not has_routing:
+        session.clear()
+        _invalidate()
+        return None
+
+    # Activate the company database; every tenant query from here on hits it.
+    tenants.set_tenant_company(company)
     user = db.session.get(User, user_id)
     if not user:
         session.clear()
-        g.current_user = None
+        _invalidate()
         return None
     try:
         version_ok = int(session.get("session_version")) == int(
@@ -79,7 +108,7 @@ def get_current_user() -> User | None:
         version_ok = False
     if not version_ok:
         session.clear()
-        g.current_user = None
+        _invalidate()
         return None
     g.current_user = user
     return user

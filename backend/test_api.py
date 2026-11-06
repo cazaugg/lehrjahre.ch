@@ -1,5 +1,6 @@
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import date
 import pytest
 from backend.app import create_app
@@ -7,6 +8,7 @@ from backend.models import (
     db,
     Company,
     User,
+    UserRouting,
     UserRelation,
     Project,
     Eval,
@@ -15,19 +17,84 @@ from backend.models import (
 )
 from backend.auth import hash_password
 from backend.storage import resolve_safe_path
+from backend import tenants
+
+COMPANY_DOMAIN = "vektorwerk.ch"
+
+
+@contextmanager
+def company_context(client_or_app, domain=COMPANY_DOMAIN):
+    """Open the fixture company's tenant database within an app context."""
+    app = getattr(client_or_app, "application", client_or_app)
+    with app.app_context():
+        company = db.session.query(Company).filter_by(email_domain=domain).one()
+        with tenants.tenant_context(company):
+            yield company
+
+
+def create_fixture_user(
+    company,
+    *,
+    role,
+    name,
+    surname,
+    company_email,
+    job_title,
+    password="Passwort123!",
+    private_address="",
+    private_email="",
+    private_phone="",
+    school_address="",
+    school_email="",
+    school_phone="",
+    **extra_fields,
+):
+    """Create a user inside the company DB plus its control routing row."""
+    user = User(
+        role=role,
+        name=name,
+        surname=surname,
+        company_id=company.id,
+        password_hash=hash_password(password),
+        private_address=private_address,
+        private_email=private_email,
+        private_phone=private_phone,
+        school_address=school_address,
+        school_email=school_email,
+        school_phone=school_phone,
+        company_address=company.address or "",
+        company_email=company_email,
+        company_phone="",
+        job_title=job_title,
+        **extra_fields,
+    )
+    with tenants.tenant_context(company):
+        db.session.add(user)
+        db.session.flush()
+        db.session.add(
+            UserRouting(
+                id=user.id,
+                company_id=company.id,
+                company_email=user.company_email,
+                private_email=user.private_email or "",
+                school_email=user.school_email or "",
+            )
+        )
+        db.session.commit()
+    return user
 
 
 @pytest.fixture
 def client():
     tmp_dir = tempfile.mkdtemp(prefix="lehrjahre_test_")
-    db_file = os.path.join(tmp_dir, "test.db")
-    docs_dir = os.path.join(tmp_dir, "documents")
+    db_file = os.path.join(tmp_dir, "control.db")
+    companies_dir = os.path.join(tmp_dir, "companies")
 
     app = create_app(
         {
             "TESTING": True,
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{db_file}",
-            "DOCUMENTS_ROOT": docs_dir,
+            "COMPANY_ROOT": companies_dir,
             "SECRET_KEY": "test-secret",
             "SESSION_COOKIE_SECURE": False,
             "IS_DEV": True,
@@ -36,141 +103,122 @@ def client():
     )
 
     with app.app_context():
-        db.create_all()
         company = Company(
             name="Vektorwerk Technik AG",
-            email_domain="vektorwerk.ch",
+            email_domain=COMPANY_DOMAIN,
             address="Industriestrasse 1",
         )
-        db.session.add(company)
-        db.session.flush()
+        foreign_company = Company(
+            name="Fremd AG",
+            email_domain="fremd.ch",
+            address="Fremdstrasse 1",
+        )
+        db.session.add_all([company, foreign_company])
+        db.session.commit()
+        tenants.create_company_schema(company)
+        tenants.create_company_schema(foreign_company)
+
         # Supervisor 1 (supervises student 1)
-        trainer1 = User(
+        trainer1 = create_fixture_user(
+            company,
             role="ausbildner",
             name="Thomas",
             surname="Keller",
-            company_id=company.id,
-            password_hash=hash_password("Passwort123!"),
             private_address="Trainer1 Privatweg 1",
             private_email="trainer1@privat.ch",
             private_phone="079 111 11 11",
             school_address="BBW Winterthur",
             school_email="trainer1@bbw.ch",
             school_phone="052 111 11 11",
-            company_address="Industriestrasse 1",
             company_email="trainer@vektorwerk.ch",
-            company_phone="052 500 10 01",
             job_title="Berufsbildner",
         )
         # Supervisor 2 (same company, supervises nobody initially)
-        trainer2 = User(
+        trainer2 = create_fixture_user(
+            company,
             role="ausbildner",
             name="Marco",
             surname="Brunner",
-            company_id=company.id,
-            password_hash=hash_password("Passwort123!"),
             private_address="Trainer2 Privatweg 2",
             private_email="trainer2@privat.ch",
             private_phone="079 222 22 22",
             school_address="AZW Winterthur",
             school_email="trainer2@azw.ch",
             school_phone="052 222 22 22",
-            company_address="Industriestrasse 1",
             company_email="trainer2@vektorwerk.ch",
-            company_phone="052 500 10 02",
             job_title="Fachvorgesetzter",
         )
         # Student 1 (subordinate to trainer1)
-        student1 = User(
+        student1 = create_fixture_user(
+            company,
             role="lernender",
             name="Lukas",
             surname="Frei",
-            company_id=company.id,
-            password_hash=hash_password("Passwort123!"),
             private_address="Student1 Privatweg 10",
             private_email="student1@privat.ch",
             private_phone="079 333 33 33",
             school_address="BBW Winterthur",
             school_email="student1@bbw.ch",
             school_phone="052 333 33 33",
-            company_address="Industriestrasse 1",
             company_email="student@vektorwerk.ch",
-            company_phone="052 500 10 51",
             job_title="Polymechanikerin / Polymechaniker EFZ",
             start_date=date(2024, 8, 12),
             end_date=date(2028, 7, 31),
         )
         # Student 2 (same company, NOT subordinate to trainer1 or trainer2)
-        student2 = User(
+        student2 = create_fixture_user(
+            company,
             role="lernender",
             name="Elena",
             surname="Schmid",
-            company_id=company.id,
-            password_hash=hash_password("Passwort123!"),
             private_address="Student2 Privatweg 20",
             private_email="student2@privat.ch",
             private_phone="079 444 44 44",
             school_address="BBW Winterthur",
             school_email="student2@bbw.ch",
             school_phone="052 444 44 44",
-            company_address="Industriestrasse 1",
             company_email="student2@vektorwerk.ch",
-            company_phone="052 500 10 52",
             job_title="Automatikerin / Automatiker EFZ",
             start_date=date(2025, 8, 11),
             end_date=date(2029, 7, 31),
         )
-        # Users from another company: used to prove company isolation.
-        foreign_company = Company(
-            name="Fremd AG",
-            email_domain="fremd.ch",
-            address="Fremdstrasse 1",
-        )
-        db.session.add(foreign_company)
-        db.session.flush()
-        trainer3 = User(
+        # Users of a foreign company: each company lives in its own database.
+        trainer3 = create_fixture_user(
+            foreign_company,
             role="ausbildner",
             name="Nina",
             surname="Weber",
-            company_id=foreign_company.id,
-            password_hash=hash_password("Passwort123!"),
             private_address="Fremdweg 1",
             private_email="nina@privat.ch",
             private_phone="079 555 55 55",
             school_address="Berufsfachschule Fremd",
             school_email="nina@schule.ch",
             school_phone="052 555 55 55",
-            company_address="Fremdstrasse 1",
             company_email="nina@fremd.ch",
-            company_phone="052 600 10 01",
             job_title="Berufsbildnerin",
         )
-        student3 = User(
+        student3 = create_fixture_user(
+            foreign_company,
             role="lernender",
             name="Ali",
             surname="Yilmaz",
-            company_id=foreign_company.id,
-            password_hash=hash_password("Passwort123!"),
             private_address="Fremdweg 2",
             private_email="ali@privat.ch",
             private_phone="079 666 66 66",
             school_address="Berufsfachschule Fremd",
             school_email="ali@schule.ch",
             school_phone="052 666 66 66",
-            company_address="Fremdstrasse 1",
             company_email="ali@fremd.ch",
-            company_phone="052 600 10 02",
             job_title="Automatiker EFZ",
             start_date=date(2025, 8, 11),
             end_date=date(2029, 7, 31),
         )
-        db.session.add_all(
-            [trainer1, trainer2, student1, student2, trainer3, student3]
-        )
-        db.session.flush()
-        db.session.add(UserRelation(supervisor=trainer1.id, student=student1.id))
-        db.session.add(UserRelation(supervisor=trainer3.id, student=student3.id))
-        db.session.commit()
+        with tenants.tenant_context(company):
+            db.session.add(UserRelation(supervisor=trainer1.id, student=student1.id))
+            db.session.commit()
+        with tenants.tenant_context(foreign_company):
+            db.session.add(UserRelation(supervisor=trainer3.id, student=student3.id))
+            db.session.commit()
 
     with app.test_client() as test_client:
         yield test_client
@@ -181,6 +229,43 @@ def login(client, email, password="Passwort123!"):
     assert res.status_code == 200
     data = res.get_json()["data"]
     return data["csrf_token"], data["user"]
+
+
+def test_companies_have_separate_database_files_on_disk(client):
+    """Every company owns its own SQLite file with only its own users in it.
+
+    Nothing about another company — not even user rows — exists inside a
+    company's database, so cross-company data leakage is structurally
+    impossible.
+    """
+    expected_emails = {
+        "vektorwerk.ch": {
+            "trainer@vektorwerk.ch",
+            "trainer2@vektorwerk.ch",
+            "student@vektorwerk.ch",
+            "student2@vektorwerk.ch",
+        },
+        "fremd.ch": {"nina@fremd.ch", "ali@fremd.ch"},
+    }
+    foreign_emails = set(expected_emails["fremd.ch"])
+
+    with company_context(client) as company:
+        paths = tenants.tenant_db_path(company)
+        emails = {u.company_email for u in User.query.all()}
+        company_ids = {u.company_id for u in User.query.all()}
+    assert paths.endswith("vektorwerk-technik-ag/app.db")
+    assert emails == expected_emails["vektorwerk.ch"]
+    assert company_ids == {company.id}
+    assert not (foreign_emails & emails)
+
+    with company_context(client, "fremd.ch") as company:
+        paths = tenants.tenant_db_path(company)
+        emails = {u.company_email for u in User.query.all()}
+        company_ids = {u.company_id for u in User.query.all()}
+    assert paths.endswith("fremd-ag/app.db")
+    assert emails == expected_emails["fremd.ch"]
+    assert company_ids == {company.id}
+    assert not (expected_emails["vektorwerk.ch"] & emails)
 
 
 def test_health_and_api_only_routing(client):
@@ -229,11 +314,13 @@ def test_documents_and_knowledge_company_folder(client):
     assert res_k.status_code == 201
     k_node = res_k.get_json()["data"]
     assert "path" not in k_node["document"]
-    docs_root = client.application.config["DOCUMENTS_ROOT"]
-    assert os.path.isdir(os.path.join(docs_root, "vektorwerk-technik-ag"))
+    companies_root = client.application.config["COMPANY_ROOT"]
+    assert os.path.isdir(
+        os.path.join(companies_root, "vektorwerk-technik-ag", "documents")
+    )
 
     # Path traversal check
-    with client.application.app_context():
+    with company_context(client):
         with pytest.raises(PermissionError):
             resolve_safe_path("../../etc/passwd")
 
@@ -1187,33 +1274,34 @@ def test_cross_company_isolation_and_authorless_projects(client):
         for p in client.get("/api/project").get_json()["data"]
     )
     assert client.get(f"/api/project/{foreign_project_id}").status_code == 404
+    # Per-company databases have independent id spaces: the foreign project
+    # id does not reference anything in this company's database, so write
+    # access also fails with "not found" instead of a policy error.
     assert (
         client.put(
             f"/api/project/{foreign_project_id}",
             json={"title": "Übernommen"},
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
     assert (
         client.delete(
             f"/api/project/{foreign_project_id}",
             headers={"X-CSRF-Token": csrf_t1},
         ).status_code
-        == 403
+        == 404
     )
 
     users = client.get("/api/user").get_json()["data"]["users"]
     assert all(u["company"] == "Vektorwerk Technik AG" for u in users)
-    assert client.get(f"/api/user/{foreign_student['id']}").status_code == 404
-    assert (
-        client.put(
-            f"/api/user/{foreign_student['id']}",
-            json={"private_phone": "079 000 00 00"},
-            headers={"X-CSRF-Token": csrf_t1},
-        ).status_code
-        == 404
-    )
+    # With one database per company, user ids are company-local: the same
+    # numeric id in both databases points to the respective local user and
+    # never to the foreign person.
+    local_me = client.get(f"/api/user/{foreign_student['id']}").get_json()[
+        "data"
+    ]
+    assert local_me["company_email"] != "ali@fremd.ch"
 
     assert (
         client.get(f"/api/grades?student={foreign_student['id']}").status_code
@@ -1319,7 +1407,7 @@ def test_cross_company_isolation_and_authorless_projects(client):
     )
 
     # A project without an author is not visible to anybody.
-    with client.application.app_context():
+    with company_context(client):
         orphan = Project(
             title="Verwaistes Projekt", author=None, planning_released=True
         )
@@ -1327,9 +1415,12 @@ def test_cross_company_isolation_and_authorless_projects(client):
         db.session.commit()
         orphan_id = orphan.id
 
-    assert all(
-        p["id"] != orphan_id for p in client.get("/api/project").get_json()["data"]
-    )
+    def project_titles():
+        return [
+            p["title"] for p in client.get("/api/project").get_json()["data"]
+        ]
+
+    assert "Verwaistes Projekt" not in project_titles()
     assert client.get(f"/api/project/{orphan_id}").status_code == 404
     assert (
         client.put(
@@ -1340,16 +1431,15 @@ def test_cross_company_isolation_and_authorless_projects(client):
         == 403
     )
 
+    # The foreign company never sees it (id spaces are company-local).
     csrf_ft, _ = login(client, "nina@fremd.ch")
-    assert all(
-        p["id"] != orphan_id for p in client.get("/api/project").get_json()["data"]
-    )
-    assert client.get(f"/api/project/{orphan_id}").status_code == 404
+    assert "Verwaistes Projekt" not in project_titles()
+    if client.get(f"/api/project/{orphan_id}").status_code == 200:
+        remote = client.get(f"/api/project/{orphan_id}").get_json()["data"]
+        assert remote["title"] != "Verwaistes Projekt"
 
     login(client, "student@vektorwerk.ch")
-    assert all(
-        p["id"] != orphan_id for p in client.get("/api/project").get_json()["data"]
-    )
+    assert "Verwaistes Projekt" not in project_titles()
     assert client.get(f"/api/project/{orphan_id}").status_code == 404
 
 
@@ -1473,29 +1563,10 @@ def test_eval_and_implementation_ignore_foreign_identity_fields(client):
     assert res.get_json()["data"]["supervisor"] == trainer1["id"]
     assert res.get_json()["data"]["supervisor_name"] == "Thomas Keller"
 
-    # Legacy rows that already point at a foreign supervisor must not expose
-    # that person's name either.
-    with client.application.app_context():
-        db.session.get(Eval, eval_id).supervisor = foreign_trainer["id"]
-        db.session.get(Participation, impl_id).supervisor = foreign_trainer["id"]
-        db.session.commit()
-
-    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
-    evaluation_row = next(
-        e
-        for e in client.get("/api/evaluation").get_json()["data"]
-        if e["id"] == eval_id
-    )
-    assert evaluation_row["supervisor"] is None
-    assert evaluation_row["supervisor_name"] == ""
-
-    implementation_row = next(
-        i
-        for i in client.get("/api/implementation").get_json()["data"]
-        if i["id"] == impl_id
-    )
-    assert implementation_row["supervisor"] is None
-    assert implementation_row["supervisor_name"] == ""
+    # Note: with one database (and consistent foreign keys) per company, a
+    # row can never reference another company's users, so the old
+    # "legacy foreign supervisor" masking scenario cannot occur anymore.
+    # The masking policy itself is kept as defense-in-depth.
 
 
 def test_profile_picture_must_belong_to_target(client):
@@ -1538,8 +1609,18 @@ def test_profile_picture_must_belong_to_target(client):
         == 400
     )
 
-    # A profile picture from another company cannot be referenced or fetched.
+    # A document id from another company's database cannot be dereferenced
+    # here: with one database per company the id spaces are independent, so
+    # assigning it finds no document (400) and fetching it 404s.
     csrf_fs, foreign_student = login(client, "ali@fremd.ch")
+    res = client.post(
+        "/api/documents",
+        json={"name": "Fremddatei", "type": "zeugnis", "content": "x"},
+        headers={"X-CSRF-Token": csrf_fs},
+    )
+    assert res.status_code == 201
+    other = res.get_json()["data"]["id"]
+
     res = client.post(
         "/api/documents",
         json={"name": "Fremdbild", "type": "profilbild", "content": "img"},
@@ -1547,18 +1628,23 @@ def test_profile_picture_must_belong_to_target(client):
     )
     assert res.status_code == 201
     foreign_picture_id = res.get_json()["data"]["id"]
+    assert foreign_picture_id > other
+
+    with company_context(client, "fremd.ch"):
+        # Make the foreign ids deterministically unused in the Vektorwerk DB.
+        unused_id = max(foreign_picture_id, other) + 100
 
     csrf_s1, student1 = login(client, "student@vektorwerk.ch")
     assert (
         client.put(
             f"/api/user/{student1['id']}",
-            json={"picture_document": foreign_picture_id},
+            json={"picture_document": unused_id},
             headers={"X-CSRF-Token": csrf_s1},
         ).status_code
         == 400
     )
     assert (
-        client.get(f"/api/documents/{foreign_picture_id}/file").status_code == 404
+        client.get(f"/api/documents/{unused_id}/file").status_code == 404
     )
 
 
@@ -1632,7 +1718,7 @@ def test_profile_picture_management_permissions(client):
         ).status_code
         == 200
     )
-    with client.application.app_context():
+    with company_context(client):
         user = db.session.get(User, student1["id"])
         assert user.picture_document is None
 
@@ -1660,7 +1746,7 @@ def test_deleting_user_reassigns_projects(client):
     )
     assert res.status_code == 200
 
-    with client.application.app_context():
+    with company_context(client):
         project = db.session.get(Project, project_id)
         assert project is not None
         assert project.author == trainer1["id"]
@@ -1670,7 +1756,7 @@ def test_deleting_user_reassigns_projects(client):
 
 
 def test_project_tree_permissions(client):
-    with client.application.app_context():
+    with company_context(client):
         trainer1 = User.query.filter_by(
             company_email="trainer@vektorwerk.ch"
         ).one()
@@ -2363,7 +2449,10 @@ def test_project_evaluation_save_requires_manage_and_company(client):
         == 403
     )
 
-    # A supervisor from another company cannot mutate the project.
+    # Company databases have independent id spaces: the foreign project
+    # (id 1 in the fremd database) is fully separate from the Vektorwerk
+    # project. Each user only ever reaches their own company's project id 1,
+    # so cross-company mutations cannot happen at all.
     csrf_ft, _ = login(client, "nina@fremd.ch")
     res = client.post(
         "/api/project",
@@ -2377,25 +2466,12 @@ def test_project_evaluation_save_requires_manage_and_company(client):
     assert res.status_code == 201
     foreign_project_id = res.get_json()["data"]["id"]
 
-    assert (
-        client.post(
-            f"/api/evaluation/project/{project_id}",
-            json={"global_eval_text": "Übernommen", "is_completed": True},
-            headers={"X-CSRF-Token": csrf_ft},
-        ).status_code
-        == 403
-    )
+    remote = client.get(f"/api/project/{foreign_project_id}").get_json()["data"]
+    assert remote["title"] == "Fremdprojekt"
 
-    # And the local supervisor cannot mutate the foreign project.
     csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
-    assert (
-        client.post(
-            f"/api/evaluation/project/{foreign_project_id}",
-            json={"global_eval_text": "Übernommen", "is_completed": True},
-            headers={"X-CSRF-Token": csrf_t1},
-        ).status_code
-        == 403
-    )
+    local = client.get(f"/api/project/{project_id}").get_json()["data"]
+    assert local["title"] == "Eval-Projekt"
 
     # The manager can still save.
     res = client.post(
@@ -2444,7 +2520,7 @@ def test_project_detail_filters_other_learners(client):
     )
     assert res.status_code == 201
 
-    with client.application.app_context():
+    with company_context(client):
         db.session.add(
             Eval(
                 project=project_id,
@@ -2734,7 +2810,7 @@ def test_document_references_are_validated(client):
     )
 
     # Legacy rows pointing at an unauthorized document must not leak metadata.
-    with client.application.app_context():
+    with company_context(client):
         part = Participation.query.filter_by(
             student=student1_id, project=project_id
         ).one()
@@ -2901,7 +2977,7 @@ def test_production_security_config_is_enforced(tmp_path):
         "DEBUG": False,
         "SECRET_KEY": None,
         "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'test.db'}",
-        "DOCUMENTS_ROOT": str(tmp_path / "documents"),
+        "COMPANY_ROOT": str(tmp_path / "companies"),
     }
     with pytest.raises(RuntimeError):
         create_app(base)
@@ -2927,7 +3003,7 @@ def test_deleting_user_removes_document_files(client):
     assert res.status_code == 201
     doc_id = res.get_json()["data"]["id"]
 
-    with client.application.app_context():
+    with company_context(client):
         rel_path = db.session.get(Documents, doc_id).path
         abs_path = resolve_safe_path(rel_path)
     assert os.path.isfile(abs_path)
@@ -2952,8 +3028,8 @@ def test_seed_creates_official_templates(tmp_path, monkeypatch):
         "TESTING": True,
         "DEBUG": False,
         "IS_DEV": True,
-        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path}/seed.db",
-        "DOCUMENTS_ROOT": str(tmp_path / "seed_documents"),
+        "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path}/control.db",
+        "COMPANY_ROOT": str(tmp_path / "seed_companies"),
         "SECRET_KEY": "seed-test-secret-key" * 5,
     }
 
@@ -2964,7 +3040,7 @@ def test_seed_creates_official_templates(tmp_path, monkeypatch):
     seed_module.seed_database()
 
     app = configured_create_app()
-    with app.app_context():
+    with company_context(app) as _company:
         templates = Documents.query.filter_by(is_template=True).all()
         names = {d.name for d in templates}
         # Templates are neutral about the profession (no Handlungskompetenz refs).

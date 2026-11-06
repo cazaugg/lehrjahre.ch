@@ -1,9 +1,11 @@
 import argparse
+import os
 import sys
 
 from backend.app import create_app
 from backend.models import Company, db, normalize_email_domain
 from backend.storage import slugify_company
+from backend import tenants
 
 
 def _company_by_name(name: str) -> Company | None:
@@ -13,6 +15,7 @@ def _company_by_name(name: str) -> Company | None:
 
 
 def add_company(name: str, domain: str, address: str = "") -> Company:
+    """Create the control-DB company registry row (no tenant file yet)."""
     name = (name or "").strip()
     if not name:
         raise ValueError("Firmenname ist erforderlich.")
@@ -29,9 +32,16 @@ def add_company(name: str, domain: str, address: str = "") -> Company:
     for existing in Company.query.all():
         if slugify_company(existing.name) == slug:
             raise ValueError(
-                f"Firmenname '{name}' kollidiert mit dem Dokumentordner von "
+                f"Firmenname '{name}' kollidiert mit dem Ordner von "
                 f"'{existing.name}'."
             )
+    from flask import current_app
+
+    collision_path = os.path.join(
+        current_app.config["COMPANY_ROOT"], slug
+    )
+    if os.path.exists(collision_path):
+        raise ValueError(f"Das Firmenverzeichnis '{slug}' existiert bereits.")
 
     company = Company(name=name, email_domain=domain, address=address)
     db.session.add(company)
@@ -64,8 +74,20 @@ def main(argv=None) -> int:
         try:
             if args.command == "add":
                 company = add_company(args.name, args.domain, args.address)
+                try:
+                    # Provision the company folder: app.db + documents/.
+                    db_path = tenants.tenant_db_path(company)
+                    tenants.create_company_schema(company)
+                except Exception:
+                    # Keep registry and filesystem consistent: drop the row
+                    # if the tenant database could not be provisioned.
+                    db.session.delete(company)
+                    db.session.commit()
+                    raise
                 print(
-                    f"Firma angelegt: {company.name} (@{company.email_domain})"
+                    f"Firma angelegt: {company.name} (@{company.email_domain})\n"
+                    f"  Firmen-Datenordner: {os.path.dirname(db_path)}\n"
+                    f"  Firmen-Datenbank:   {db_path}"
                 )
             elif args.command == "list":
                 companies = list_companies()

@@ -9,6 +9,7 @@ from backend.models import (
     db,
     Company,
     User,
+    UserRouting,
     UserRelation,
     Project,
     Participation,
@@ -19,6 +20,8 @@ from backend.models import (
 )
 from backend.auth import hash_password
 from backend.storage import get_company_dir, save_text_document
+from backend.companies import add_company
+from backend import tenants
 
 
 KNOWLEDGE_TOPICS = [
@@ -808,6 +811,11 @@ def build_pdf_preview() -> bytes:
     return bytes(pdf)
 
 
+COMPANY_NAME = "Vektorwerk Technik AG"
+COMPANY_DOMAIN = "vektorwerk.ch"
+COMPANY_ADDRESS = "Industriestrasse 40, 8404 Winterthur"
+
+
 def seed_database():
     app = create_app()
     if not app.config.get("IS_DEV"):
@@ -815,1184 +823,1199 @@ def seed_database():
             "Seeding demo data is development-only. Set LEHRJAHRE_ENV=development."
         )
     with app.app_context():
-        if User.query.first():
-            print("Database already contains users. Skipping seed.")
-            return
-
-        company_name = "Vektorwerk Technik AG"
-        company = Company.query.filter_by(name=company_name).first()
+        company = Company.query.filter_by(name=COMPANY_NAME).first()
         if not company:
-            company = Company(
-                name=company_name,
-                email_domain="vektorwerk.ch",
-                address="Industriestrasse 40, 8404 Winterthur",
+            company = add_company(COMPANY_NAME, COMPANY_DOMAIN, COMPANY_ADDRESS)
+        # Provision (idempotent) the company folder: app.db + documents/.
+        tenants.create_company_schema(company)
+        # All demo data (users incl. credentials, documents, ...) lives in
+        # the company database only.
+        with tenants.tenant_context(company):
+            if User.query.first():
+                print("Database already contains users. Skipping seed.")
+                return
+            _seed_company_data(company)
+
+
+def _seed_company_data(company):
+    # 1. Trainers (Ausbildner)
+    admin = User(
+        role="ausbildner",
+        name="Thomas",
+        surname="Keller",
+        company_id=company.id,
+        password_hash=hash_password("Lehrjahre2026!"),
+        private_address="Bahnhofstrasse 12, 8400 Winterthur",
+        private_email="thomas.keller@privat.ch",
+        private_phone="+41 79 311 22 33",
+        school_address="BBW Berufsbildungsschule Winterthur",
+        school_email="sekretariat@bbw.ch",
+        school_phone="+41 52 267 81 11",
+        company_address="Industriestrasse 40, 8404 Winterthur",
+        company_email="thomas.keller@vektorwerk.ch",
+        company_phone="+41 52 500 10 01",
+        job_title="Berufsbildner",
+    )
+
+    hr_user = User(
+        role="ausbildner",
+        name="Sandra",
+        surname="Meier",
+        company_id=company.id,
+        password_hash=hash_password("Lehrjahre2026!"),
+        private_address="Rosenweg 5, 8000 Zürich",
+        private_email="s.meier@privat.ch",
+        private_phone="+41 78 400 11 22",
+        school_address="",
+        school_email="",
+        school_phone="",
+        company_address="Industriestrasse 40, 8404 Winterthur",
+        company_email="sandra.meier@vektorwerk.ch",
+        company_phone="+41 52 500 10 02",
+        job_title="HR / Rekrutierung",
+    )
+
+    fach_user = User(
+        role="ausbildner",
+        name="Marco",
+        surname="Brunner",
+        company_id=company.id,
+        password_hash=hash_password("Lehrjahre2026!"),
+        private_address="Lindenstrasse 8, 8400 Winterthur",
+        private_email="m.brunner@privat.ch",
+        private_phone="+41 76 555 44 33",
+        school_address="AZW Ausbildungszentrum Winterthur",
+        school_email="info@azw.ch",
+        school_phone="+41 52 260 11 11",
+        company_address="Werkhalle 2, Industriestrasse 40, 8404 Winterthur",
+        company_email="marco.brunner@vektorwerk.ch",
+        company_phone="+41 52 500 10 15",
+        job_title="Fachvorgesetzter",
+    )
+
+    # 2. Apprentices (Lernende)
+    student1 = User(
+        role="lernender",
+        name="Lukas",
+        surname="Frei",
+        company_id=company.id,
+        password_hash=hash_password("Lehrjahre2026!"),
+        private_address="Wiesenstrasse 19, 8400 Winterthur",
+        private_email="lukas.frei@bluewin.ch",
+        private_phone="+41 79 812 34 56",
+        school_address="BBW Winterthur, Pionierstrasse 28, 8400 Winterthur",
+        school_email="lukas.frei@stud.bbw.ch",
+        school_phone="+41 52 267 81 11",
+        company_address="Industriestrasse 40, 8404 Winterthur",
+        company_email="lukas.frei@vektorwerk.ch",
+        company_phone="+41 52 500 10 51",
+        start_date=date(2024, 8, 12),
+        end_date=date(2028, 7, 31),
+        job_title="Polymechanikerin / Polymechaniker EFZ",
+    )
+
+    student2 = User(
+        role="lernender",
+        name="Elena",
+        surname="Schmid",
+        company_id=company.id,
+        password_hash=hash_password("Lehrjahre2026!"),
+        private_address="Seestrasse 44, 8405 Winterthur",
+        private_email="elena.schmid@gmail.com",
+        private_phone="+41 77 901 23 45",
+        school_address="BBW Winterthur, Pionierstrasse 28, 8400 Winterthur",
+        school_email="elena.schmid@stud.bbw.ch",
+        school_phone="+41 52 267 81 11",
+        company_address="Industriestrasse 40, 8404 Winterthur",
+        company_email="elena.schmid@vektorwerk.ch",
+        company_phone="+41 52 500 10 52",
+        start_date=date(2025, 8, 11),
+        end_date=date(2029, 7, 31),
+        job_title="Automatikerin / Automatiker EFZ",
+    )
+
+    db.session.add_all([admin, hr_user, fach_user, student1, student2])
+    db.session.flush()
+
+    # Register the login routing rows in the control database; the full user
+    # records live in the company database only.
+    db.session.add_all(
+        [
+            UserRouting(
+                id=user.id,
+                company_id=company.id,
+                company_email=user.company_email,
+                private_email=user.private_email or "",
+                school_email=user.school_email or "",
             )
-            db.session.add(company)
-            db.session.flush()
-
-        # 1. Trainers (Ausbildner)
-        admin = User(
-            role="ausbildner",
-            name="Thomas",
-            surname="Keller",
-            company_id=company.id,
-            password_hash=hash_password("Lehrjahre2026!"),
-            private_address="Bahnhofstrasse 12, 8400 Winterthur",
-            private_email="thomas.keller@privat.ch",
-            private_phone="+41 79 311 22 33",
-            school_address="BBW Berufsbildungsschule Winterthur",
-            school_email="sekretariat@bbw.ch",
-            school_phone="+41 52 267 81 11",
-            company_address="Industriestrasse 40, 8404 Winterthur",
-            company_email="thomas.keller@vektorwerk.ch",
-            company_phone="+41 52 500 10 01",
-            job_title="Berufsbildner",
-        )
-
-        hr_user = User(
-            role="ausbildner",
-            name="Sandra",
-            surname="Meier",
-            company_id=company.id,
-            password_hash=hash_password("Lehrjahre2026!"),
-            private_address="Rosenweg 5, 8000 Zürich",
-            private_email="s.meier@privat.ch",
-            private_phone="+41 78 400 11 22",
-            school_address="",
-            school_email="",
-            school_phone="",
-            company_address="Industriestrasse 40, 8404 Winterthur",
-            company_email="sandra.meier@vektorwerk.ch",
-            company_phone="+41 52 500 10 02",
-            job_title="HR / Rekrutierung",
-        )
-
-        fach_user = User(
-            role="ausbildner",
-            name="Marco",
-            surname="Brunner",
-            company_id=company.id,
-            password_hash=hash_password("Lehrjahre2026!"),
-            private_address="Lindenstrasse 8, 8400 Winterthur",
-            private_email="m.brunner@privat.ch",
-            private_phone="+41 76 555 44 33",
-            school_address="AZW Ausbildungszentrum Winterthur",
-            school_email="info@azw.ch",
-            school_phone="+41 52 260 11 11",
-            company_address="Werkhalle 2, Industriestrasse 40, 8404 Winterthur",
-            company_email="marco.brunner@vektorwerk.ch",
-            company_phone="+41 52 500 10 15",
-            job_title="Fachvorgesetzter",
-        )
-
-        # 2. Apprentices (Lernende)
-        student1 = User(
-            role="lernender",
-            name="Lukas",
-            surname="Frei",
-            company_id=company.id,
-            password_hash=hash_password("Lehrjahre2026!"),
-            private_address="Wiesenstrasse 19, 8400 Winterthur",
-            private_email="lukas.frei@bluewin.ch",
-            private_phone="+41 79 812 34 56",
-            school_address="BBW Winterthur, Pionierstrasse 28, 8400 Winterthur",
-            school_email="lukas.frei@stud.bbw.ch",
-            school_phone="+41 52 267 81 11",
-            company_address="Industriestrasse 40, 8404 Winterthur",
-            company_email="lukas.frei@vektorwerk.ch",
-            company_phone="+41 52 500 10 51",
-            start_date=date(2024, 8, 12),
-            end_date=date(2028, 7, 31),
-            job_title="Polymechanikerin / Polymechaniker EFZ",
-        )
-
-        student2 = User(
-            role="lernender",
-            name="Elena",
-            surname="Schmid",
-            company_id=company.id,
-            password_hash=hash_password("Lehrjahre2026!"),
-            private_address="Seestrasse 44, 8405 Winterthur",
-            private_email="elena.schmid@gmail.com",
-            private_phone="+41 77 901 23 45",
-            school_address="BBW Winterthur, Pionierstrasse 28, 8400 Winterthur",
-            school_email="elena.schmid@stud.bbw.ch",
-            school_phone="+41 52 267 81 11",
-            company_address="Industriestrasse 40, 8404 Winterthur",
-            company_email="elena.schmid@vektorwerk.ch",
-            company_phone="+41 52 500 10 52",
-            start_date=date(2025, 8, 11),
-            end_date=date(2029, 7, 31),
-            job_title="Automatikerin / Automatiker EFZ",
-        )
-
-        db.session.add_all([admin, hr_user, fach_user, student1, student2])
-        db.session.flush()
-
-        # 3. User Relations
-        db.session.add_all(
-            [
-                UserRelation(supervisor=admin.id, student=student1.id),
-                UserRelation(supervisor=fach_user.id, student=student1.id),
-                UserRelation(supervisor=hr_user.id, student=student1.id),
-                UserRelation(supervisor=admin.id, student=student2.id),
-                UserRelation(supervisor=hr_user.id, student=student2.id),
-            ]
-        )
-
-        # 4. Projects, Topics & Internships
-        root_project = Project(
-            parent_project=None,
-            title="Basisausbildung 1. Lehrjahr – Konventionelle Fertigung",
-            description="Grundlagen der spanabhebenden Bearbeitung (Bohren, Drehen, Fräsen) sowie Messtechnik und Arbeitssicherheit nach EKAS.",
-            author=admin.id,
-            goals=json.dumps(
-                [
-                    "Arbeitssicherheit und PSA an Dreh- und Fräsmaschinen konsequent anwenden",
-                    "Werkstücke nach ISO-Toleranzen fertigen und mit Bügelmessschraube prüfen",
-                    "Schnittdaten (vc, n, vf) selbstständig aus Tabellenbuch berechnen",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2024, 8, 12),
-            due_date=date(2025, 1, 31),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-            global_eval_text="Beide Lernenden haben sich rasch an die Sicherheitsregeln in der Werkstatt gewöhnt.",
-        )
-        db.session.add(root_project)
-        db.session.flush()
-
-        sub_project1 = Project(
-            parent_project=root_project.id,
-            title="Aufgabe 1: Schraubstock-Spannbacken fräsen",
-            description="Herstellung eines Satzes gehärteter Spannbacken auf der konventionellen Universalfräsmaschine inkl. Prüfprotokoll.",
-            author=fach_user.id,
-            goals=json.dumps(
-                [
-                    "Winkligkeit und Parallelität innerhalb 0.02 mm einhalten",
-                    "Oberflächenrauhigkeit Ra 1.6 erreichen",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2024, 9, 2),
-            due_date=date(2024, 10, 18),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-
-        sub_project1b = Project(
-            parent_project=root_project.id,
-            title="Aufgabe 2: Passbolzen drehen & Messprotokoll",
-            description="Fertigung eines gestuften Passbolzens mit Passung g6 auf der Leit- und Zugspindeldrehmaschine.",
-            author=fach_user.id,
-            goals=json.dumps([]),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2024, 10, 21),
-            due_date=date(2024, 11, 29),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-
-        sub_project2 = Project(
-            parent_project=None,
-            title="Schwerpunktausbildung – CNC-Drehen & CAM-Grundlagen",
-            description="Programmierung nach ISO-Code, Werkzeugvermessung, Einrichten von Spannmitteln und Serienüberwachung.",
-            author=admin.id,
-            goals=json.dumps(
-                [
-                    "Nullpunktverschiebung und Werkzeugkorrekturen fehlerfrei einrichten",
-                    "Erstmusterprüfung im Messraum dokumentieren",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2025, 2, 3),
-            due_date=date(2025, 7, 18),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-        db.session.add_all([sub_project1, sub_project1b, sub_project2])
-        db.session.flush()
-
-        # 4b. Additional projects with different students and difficulty levels
-        # (einfach -> mittel -> anspruchsvoll)
-
-        # Einfach: abgeschlossenes Projekt für Elena
-        p_pneumatik = Project(
-            parent_project=None,
-            title="Pneumatik-Hubvorrichtung montieren",
-            description="Einfaches Einstiegsprojekt: Eine pneumatische Hubvorrichtung nach Plan aufbauen, verdrahten und auf Dichtheit prüfen.",
-            author=fach_user.id,
-            goals=json.dumps(
-                [
-                    "Pneumatikplan lesen und Bauteile korrekt zuordnen",
-                    "Zylinder, Ventile und Drosseln normgerecht montieren",
-                    "Dichtheit und Endlagen mit Lecksuchspray und Manometer prüfen",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2025, 9, 15),
-            due_date=date(2025, 10, 10),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-            global_eval_text="Elena hat die Hubvorrichtung selbstständig und sauber montiert. Die Funktionsprüfung war vollständig dokumentiert.",
-        )
-        db.session.add(p_pneumatik)
-        db.session.flush()
-
-        task_pneumatik_plan = Project(
-            parent_project=p_pneumatik.id,
-            title="Aufgabe 1: Pneumatikplan lesen und Bauteile bereitstellen",
-            description="Stückliste und Pneumatikplan vergleichen, benötigte Ventile, Zylinder und Fittings bereitstellen.",
-            author=fach_user.id,
-            goals=json.dumps(["Stückliste mit Plan abgleichen"], ensure_ascii=False),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2025, 9, 15),
-            due_date=date(2025, 9, 26),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-        task_pneumatik_montage = Project(
-            parent_project=p_pneumatik.id,
-            title="Aufgabe 2: Hubvorrichtung montieren und Dichtheit prüfen",
-            description="Zylinder, Ventile und Drosseln montieren, Verschraubungen anziehen und die Anlage auf Dichtheit prüfen.",
-            author=fach_user.id,
-            goals=json.dumps(
-                ["Alle Verschraubungen mit korrektem Drehmoment anziehen"],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2025, 9, 29),
-            due_date=date(2025, 10, 10),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-
-        # Einfach: abgeschlossenes Projekt für Lukas
-        p_werkzeug = Project(
-            parent_project=None,
-            title="Werkzeugkunde: Schneidwerkzeuge instand halten",
-            description="Einfaches Projekt zur Pflege und Beurteilung von Bohrern, Gewindebohrern und Fräsern inkl. Schleif- und Prüfprotokoll.",
-            author=admin.id,
-            goals=json.dumps(
-                [
-                    "Schneidwerkzeuge nach Verschleissbild beurteilen",
-                    "Bohrer mit der Schleifvorrichtung korrekt anschleifen",
-                    "Werkzeugausgabe und Prüfprotokoll nachführen",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2025, 9, 1),
-            due_date=date(2025, 9, 19),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-            global_eval_text="Lukas beurteilt Verschleissbilder zuverlässig und arbeitet beim Anschleifen sehr genau.",
-        )
-        db.session.add(p_werkzeug)
-        db.session.flush()
-
-        task_werkzeug_schleifen = Project(
-            parent_project=p_werkzeug.id,
-            title="Aufgabe 1: Bohrersatz prüfen und anschleifen",
-            description="Verschlissene Bohrer aussortieren, mit der Schleifvorrichtung anschleifen und die Schneidengeometrie prüfen.",
-            author=admin.id,
-            goals=json.dumps(["Freiwinkel und Spitzenwinkel kontrollieren"], ensure_ascii=False),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2025, 9, 1),
-            due_date=date(2025, 9, 12),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-        task_werkzeug_inventar = Project(
-            parent_project=p_werkzeug.id,
-            title="Aufgabe 2: Werkzeugausgabe inventarisieren",
-            description="Werkzeugbestand aufnehmen, beschädigte Werkzeuge kennzeichnen und fehlende Positionen nachbestellen.",
-            author=admin.id,
-            goals=json.dumps(["Inventarliste vollständig und nachvollziehbar führen"], ensure_ascii=False),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2025, 9, 15),
-            due_date=date(2025, 9, 19),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-
-        # Mittel: laufendes Projekt für Elena
-        p_schaltung = Project(
-            parent_project=None,
-            title="Motorsteuerung mit Schützschaltung aufbauen",
-            description="Mittleres Projekt: Steuerung eines Drehstrommotors mit Schützen, Tastern und Selbsthaltung nach Schaltplan aufbauen und prüfen.",
-            author=fach_user.id,
-            goals=json.dumps(
-                [
-                    "Schaltplan in eine sichere Verdrahtung umsetzen",
-                    "Selbsthaltung und Verriegelung funktional testen",
-                    "Messwerte mit Multimeter und Stromzange dokumentieren",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2025, 11, 3),
-            due_date=date(2025, 12, 12),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-        db.session.add(p_schaltung)
-        db.session.flush()
-
-        task_schaltung_plan = Project(
-            parent_project=p_schaltung.id,
-            title="Aufgabe 1: Schaltplan analysieren und Material bereitstellen",
-            description="Schaltplan lesen, benötigte Schütze, Taster und Leiterquerschnitte bestimmen und Material bereitstellen.",
-            author=fach_user.id,
-            goals=json.dumps(["Benötigte Betriebsmittel korrekt bestimmen"], ensure_ascii=False),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2025, 11, 3),
-            due_date=date(2025, 11, 14),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-        task_schaltung_verdrahten = Project(
-            parent_project=p_schaltung.id,
-            title="Aufgabe 2: Schaltung verdrahten und messtechnisch prüfen",
-            description="Schaltung nach Plan verdrahten, Funktion der Selbsthaltung testen und Spannungen sowie Ströme messen.",
-            author=fach_user.id,
-            goals=json.dumps(
-                ["Spannungs- und Strommessungen nachvollziehbar protokollieren"],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2025, 11, 17),
-            due_date=date(2025, 12, 12),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-
-        # Mittel: laufendes Projekt für Lukas
-        p_getriebe = Project(
-            parent_project=None,
-            title="Getriebemontage nach technischer Zeichnung",
-            description="Mittleres Projekt: Ein zweistufiges Stirnradgetriebe nach Zeichnung montieren, ausrichten und die Endkontrolle dokumentieren.",
-            author=admin.id,
-            goals=json.dumps(
-                [
-                    "Montagereihenfolge anhand der Zeichnung festlegen",
-                    "Lager und Wellen beschädigungsfrei montieren",
-                    "Zahnflankenspiel und Leichtlauf prüfen",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2026, 1, 12),
-            due_date=date(2026, 2, 27),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-        db.session.add(p_getriebe)
-        db.session.flush()
-
-        task_getriebe_vorbereiten = Project(
-            parent_project=p_getriebe.id,
-            title="Aufgabe 1: Bauteile prüfen und Montagereihenfolge festlegen",
-            description="Alle Bauteile auf Vollständigkeit und Beschädigungen prüfen, Reinigung durchführen und die Montagereihenfolge dokumentieren.",
-            author=admin.id,
-            goals=json.dumps(["Montageanleitung und Zeichnung konsistent umsetzen"], ensure_ascii=False),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2026, 1, 12),
-            due_date=date(2026, 1, 23),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-        task_getriebe_montieren = Project(
-            parent_project=p_getriebe.id,
-            title="Aufgabe 2: Getriebe montieren, ausrichten und Endkontrolle",
-            description="Wellen und Lager montieren, Gehäuse ausrichten, Zahnflankenspiel messen und die Endkontrolle durchführen.",
-            author=admin.id,
-            goals=json.dumps(
-                ["Zahnflankenspiel innerhalb der Zeichnungsvorgabe einstellen"],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id]),
-            start_date=date(2026, 1, 26),
-            due_date=date(2026, 2, 27),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-
-        # Anspruchsvoll: laufendes Projekt für Elena
-        p_sps = Project(
-            parent_project=None,
-            title="SPS-gesteuerte Sortieranlage in Betrieb nehmen",
-            description="Anspruchsvolles Projekt: Sensorik, Aktorik und SPS-Programm einer Sortieranlage zusammenführen, simulieren und in Betrieb nehmen.",
-            author=admin.id,
-            goals=json.dumps(
-                [
-                    "Sensorik und Aktorik nach Stromlaufplan verdrahten",
-                    "SPS-Programm strukturiert erstellen und simulieren",
-                    "Anlage sicher einrichten, testen und dokumentieren",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2026, 3, 16),
-            due_date=date(2026, 6, 26),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-        db.session.add(p_sps)
-        db.session.flush()
-
-        task_sps_verdrahten = Project(
-            parent_project=p_sps.id,
-            title="Aufgabe 1: Sensorik und Aktorik am Prüfstand verdrahten",
-            description="Induktive, optische und kapazitive Sensoren sowie Ventile und Motoren nach Stromlaufplan anschliessen.",
-            author=admin.id,
-            goals=json.dumps(["Alle Signal- und Versorgungsleitungen korrekt auflegen"], ensure_ascii=False),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2026, 3, 16),
-            due_date=date(2026, 4, 10),
-            is_published=True,
-            planning_released=True,
-            is_completed=True,
-        )
-        task_sps_programm = Project(
-            parent_project=p_sps.id,
-            title="Aufgabe 2: SPS-Programm erstellen und simulieren",
-            description="Ablaufsteuerung mit Schritten und Verzweigungen programmieren, Variablen benennen und die Simulation testen.",
-            author=admin.id,
-            goals=json.dumps(["Programm lesbar strukturieren und kommentieren"], ensure_ascii=False),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2026, 4, 13),
-            due_date=date(2026, 5, 22),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-        task_sps_inbetriebnahme = Project(
-            parent_project=p_sps.id,
-            title="Aufgabe 3: Anlage einrichten, testen und dokumentieren",
-            description="Anlage im Einzelsatz und Automatikbetrieb testen, Störungen beheben und die Inbetriebnahme dokumentieren.",
-            author=admin.id,
-            goals=json.dumps(["Inbetriebnahmeprotokoll vollständig führen"], ensure_ascii=False),
-            assigned_students=json.dumps([student2.id]),
-            start_date=date(2026, 5, 26),
-            due_date=date(2026, 6, 26),
-            is_published=True,
-            planning_released=True,
-            is_completed=False,
-        )
-
-        # Anspruchsvoll: Entwurf für beide Lernenden
-        p_bildverarbeitung = Project(
-            parent_project=None,
-            title="Bildverarbeitung: automatische Qualitätsprüfung",
-            description="Anspruchsvolles Projekt: Eine kamerabasierte Qualitätsprüfung mit Roboterübergabe konzipieren, aufbauen und auswerten.",
-            author=admin.id,
-            goals=json.dumps(
-                [
-                    "Prüfmerkmale und Beleuchtung definieren",
-                    "Kamerasystem kalibrieren und Prüfprogramm erstellen",
-                    "Ausschussquoten auswerten und Verbesserungen ableiten",
-                ],
-                ensure_ascii=False,
-            ),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2026, 8, 17),
-            due_date=date(2026, 12, 18),
-            is_published=False,
-            planning_released=False,
-            is_completed=False,
-        )
-        db.session.add(p_bildverarbeitung)
-        db.session.flush()
-
-        task_bild_pruefkonzept = Project(
-            parent_project=p_bildverarbeitung.id,
-            title="Aufgabe 1: Prüfkonzept und Beleuchtung definieren",
-            description="Zu prüfende Merkmale festlegen, Beleuchtungsszenarien vergleichen und das Prüfkonzept dokumentieren.",
-            author=admin.id,
-            goals=json.dumps(["Prüfmerkmale messbar beschreiben"], ensure_ascii=False),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2026, 8, 17),
-            due_date=date(2026, 9, 11),
-            is_published=False,
-            planning_released=False,
-            is_completed=False,
-        )
-        task_bild_kalibrieren = Project(
-            parent_project=p_bildverarbeitung.id,
-            title="Aufgabe 2: Kamerasystem kalibrieren und Prüfprogramm erstellen",
-            description="Kamera und Beleuchtung einrichten, Kalibrierung durchführen und ein Prüfprogramm mit Toleranzgrenzen erstellen.",
-            author=admin.id,
-            goals=json.dumps(["Kalibrierung reproduzierbar dokumentieren"], ensure_ascii=False),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2026, 9, 14),
-            due_date=date(2026, 11, 6),
-            is_published=False,
-            planning_released=False,
-            is_completed=False,
-        )
-        task_bild_auswerten = Project(
-            parent_project=p_bildverarbeitung.id,
-            title="Aufgabe 3: Testreihe auswerten und dokumentieren",
-            description="Testreihe mit Gut- und Schlechtteilen durchführen, Ausschussquote berechnen und Verbesserungen vorschlagen.",
-            author=admin.id,
-            goals=json.dumps(["Auswertung mit Kennzahlen und Massnahmen belegen"], ensure_ascii=False),
-            assigned_students=json.dumps([student1.id, student2.id]),
-            start_date=date(2026, 11, 9),
-            due_date=date(2026, 12, 18),
-            is_published=False,
-            planning_released=False,
-            is_completed=False,
-        )
-
-        db.session.add_all(
-            [
-                task_pneumatik_plan,
-                task_pneumatik_montage,
-                task_werkzeug_schleifen,
-                task_werkzeug_inventar,
-                task_schaltung_plan,
-                task_schaltung_verdrahten,
-                task_getriebe_vorbereiten,
-                task_getriebe_montieren,
-                task_sps_verdrahten,
-                task_sps_programm,
-                task_sps_inbetriebnahme,
-                task_bild_pruefkonzept,
-                task_bild_kalibrieren,
-                task_bild_auswerten,
-            ]
-        )
-        db.session.flush()
-
-        # 5. Participations (/api/implementation)
-        part1 = Participation(
-            supervisor=fach_user.id,
-            student=student1.id,
-            project=sub_project1.id,
-            title=sub_project1.title,
-            text="Rohteil aus 16MnCr5 auf der Bandsäge mit 3 mm Aufmass zugesägt. Anschliessend mit Messerkopf alle 6 Seiten im Schraubstock winklig und parallel vorbearbeitet. Alle Masse im Toleranzfeld.",
-            is_done=True,
-        )
-        part2 = Participation(
-            supervisor=admin.id,
-            student=student1.id,
-            project=sub_project2.id,
-            title=sub_project2.title,
-            text="ISO-Programm für Schrupp- und Schlichtzyklus geschrieben. Simulation durchgeführt; Einfahren im Einzelsatz steht noch aus.",
-            is_done=False,
-        )
-        part_pneumatik_plan = Participation(
-            supervisor=fach_user.id,
-            student=student2.id,
-            project=task_pneumatik_plan.id,
-            title=task_pneumatik_plan.title,
-            text="Stückliste mit dem Pneumatikplan abgeglichen. Alle Ventile, Zylinder und Fittings waren vorhanden; zwei Dichtringe wurden ersetzt.",
-            is_done=True,
-        )
-        part_pneumatik_montage = Participation(
-            supervisor=fach_user.id,
-            student=student2.id,
-            project=task_pneumatik_montage.id,
-            title=task_pneumatik_montage.title,
-            text="Hubvorrichtung montiert und alle Verschraubungen mit dem Drehmomentschlüssel angezogen. Dichtheitsprüfung mit Lecksuchspray ohne Befund.",
-            is_done=True,
-        )
-        part_werkzeug_schleifen = Participation(
-            supervisor=admin.id,
-            student=student1.id,
-            project=task_werkzeug_schleifen.id,
-            title=task_werkzeug_schleifen.title,
-            text="Acht Bohrer geprüft, vier als verschlissen aussortiert und die übrigen mit der Schleifvorrichtung neu angeschliffen. Spitzenwinkel kontrolliert.",
-            is_done=True,
-        )
-        part_schaltung_plan = Participation(
-            supervisor=fach_user.id,
-            student=student2.id,
-            project=task_schaltung_plan.id,
-            title=task_schaltung_plan.title,
-            text="Schaltplan analysiert und die benötigten Schütze, Taster sowie Leiterquerschnitte bestimmt. Material vollständig bereitgestellt.",
-            is_done=True,
-        )
-        part_getriebe_vorbereiten = Participation(
-            supervisor=admin.id,
-            student=student1.id,
-            project=task_getriebe_vorbereiten.id,
-            title=task_getriebe_vorbereiten.title,
-            text="Alle Bauteile gereinigt und auf Beschädigungen geprüft. Montagereihenfolge anhand der Zeichnung festgelegt und dokumentiert.",
-            is_done=True,
-        )
-        part_sps_verdrahten = Participation(
-            supervisor=admin.id,
-            student=student2.id,
-            project=task_sps_verdrahten.id,
-            title=task_sps_verdrahten.title,
-            text="Sensoren und Aktoren am Prüfstand nach Stromlaufplan verdrahtet. Alle Signal- und Versorgungsleitungen mit Kabelbindern sauber geführt.",
-            is_done=True,
-        )
-        db.session.add_all(
-            [
-                part1,
-                part2,
-                part_pneumatik_plan,
-                part_pneumatik_montage,
-                part_werkzeug_schleifen,
-                part_schaltung_plan,
-                part_getriebe_vorbereiten,
-                part_sps_verdrahten,
-            ]
-        )
-        db.session.flush()
-
-        # 6. Evaluations (/api/evaluation)
-        eval_proj = Eval(
-            project=root_project.id,
-            target_type="project",
-            goal=root_project.title,
-            student=student1.id,
-            supervisor=admin.id,
-            eval_text="Lukas arbeitet sehr sorgfältig und strukturiert an den konventionellen Maschinen.",
-            score_type="grade",
-            score_value=5.4,
-            is_released=True,
-            eval_released=True,
-        )
-        eval1 = Eval(
-            project=sub_project1.id,
-            participation=part1.id,
-            target_type="task",
-            goal=sub_project1.title,
-            student=student1.id,
-            supervisor=fach_user.id,
-            planning_text="Sauberes Entgraten nach jedem Aufspannen und Kontrolle der Auflagefläche mit Messuhr.",
-            eval_text="Sehr exakte Arbeitsweise. Prüfprotokoll zeigt Abweichungen von max. 0.01 mm. Ziel vollumfänglich erreicht (A).",
-            score_type="grade",
-            score_value=5.5,
-            is_released=True,
-            eval_released=True,
-        )
-        eval_goal1 = Eval(
-            project=root_project.id,
-            target_type="goal",
-            goal="Arbeitssicherheit und PSA an Dreh- und Fräsmaschinen konsequent anwenden",
-            student=student1.id,
-            supervisor=admin.id,
-            eval_text="Vorbildliche Einhaltung der SUVA-Regeln (Schutzbrille, Spänehaken).",
-            is_released=True,
-            eval_released=True,
-        )
-        eval_pneumatik_project = Eval(
-            project=p_pneumatik.id,
-            target_type="project",
-            goal=p_pneumatik.title,
-            student=student2.id,
-            supervisor=fach_user.id,
-            eval_text="Elena hat das Einstiegsprojekt selbstständig umgesetzt und die Dichtheitsprüfung sauber dokumentiert.",
-            score_type="grade",
-            score_value=5.3,
-            is_released=True,
-            eval_released=True,
-        )
-        eval_pneumatik_task = Eval(
-            project=task_pneumatik_montage.id,
-            participation=part_pneumatik_montage.id,
-            target_type="task",
-            goal=task_pneumatik_montage.title,
-            student=student2.id,
-            supervisor=fach_user.id,
-            eval_text="Sorgfältige Montage, korrekte Drehmomente und eine vollständige Funktionsprüfung.",
-            score_type="grade",
-            score_value=5.4,
-            is_released=True,
-            eval_released=True,
-        )
-        eval_werkzeug_project = Eval(
-            project=p_werkzeug.id,
-            target_type="project",
-            goal=p_werkzeug.title,
-            student=student1.id,
-            supervisor=admin.id,
-            eval_text="Lukas beurteilt den Werkzeugverschleiss sicher und führt das Inventar zuverlässig nach.",
-            score_type="grade",
-            score_value=5.0,
-            is_released=True,
-            eval_released=True,
-        )
-        eval_getriebe_task = Eval(
-            project=task_getriebe_vorbereiten.id,
-            participation=part_getriebe_vorbereiten.id,
-            target_type="task",
-            goal=task_getriebe_vorbereiten.title,
-            student=student1.id,
-            supervisor=admin.id,
-            eval_text="Bauteile vollständig geprüft und die Montagereihenfolge nachvollziehbar hergeleitet.",
-            score_type="grade",
-            score_value=5.1,
-            is_released=True,
-            eval_released=True,
-        )
-        eval_sps_project = Eval(
-            project=p_sps.id,
-            target_type="project",
-            goal=p_sps.title,
-            student=student2.id,
-            supervisor=admin.id,
-            eval_text="Elena arbeitet sehr strukturiert an der Verdrahtung. Die Inbetriebnahme ist noch nicht abgeschlossen.",
-            score_type=None,
-            score_value=None,
-            is_released=False,
-            eval_released=False,
-        )
-        db.session.add_all(
-            [
-                eval_proj,
-                eval1,
-                eval_goal1,
-                eval_pneumatik_project,
-                eval_pneumatik_task,
-                eval_werkzeug_project,
-                eval_getriebe_task,
-                eval_sps_project,
-            ]
-        )
-
-        # 7. Grades (/api/grades)
-        db.session.add_all(
-            [
-                Grades(
-                    student=student1.id,
-                    subject="Technische Grundlagen (Mathematik & Physik)",
-                    date=date(2025, 10, 15),
-                    grade=5.2,
-                    title="Kräfteberechnung & Drehmoment",
-                    comment="Sehr gute Herleitung der Gleichgewichtsbedingungen.",
-                ),
-                Grades(
-                    student=student1.id,
-                    subject="Werkstoff- und Fertigungstechnik",
-                    date=date(2025, 11, 20),
-                    grade=5.5,
-                    title="Eisen-Kohlenstoff-Diagramm & Wärmebehandlung",
-                    comment="Härteverfahren sicher beherrscht.",
-                ),
-                Grades(
-                    student=student1.id,
-                    subject="Zeichnungstechnik / CAD",
-                    date=date(2025, 12, 10),
-                    grade=4.8,
-                    title="Baugruppenzeichnung & Form- und Lagetoleranzen",
-                    comment="Schnittdarstellung korrekt, Oberflächensymbole beachten.",
-                ),
-                Grades(
-                    student=student1.id,
-                    subject="Allgemeinbildung (ABU)",
-                    date=date(2026, 1, 22),
-                    grade=5.0,
-                    title="Recht & Obligationenrecht (Lehrvertrag)",
-                    comment="",
-                ),
-                Grades(
-                    student=student2.id,
-                    subject="Montagetechnik",
-                    date=date(2025, 10, 24),
-                    grade=5.3,
-                    title="Pneumatik-Hubvorrichtung montieren",
-                    comment="Saubere Montage und vollständige Dichtheitsprüfung.",
-                ),
-                Grades(
-                    student=student2.id,
-                    subject="Elektrotechnik",
-                    date=date(2025, 12, 19),
-                    grade=5.0,
-                    title="Motorsteuerung mit Schützschaltung",
-                    comment="Schaltung korrekt verdrahtet, Messprotokoll nachvollziehbar.",
-                ),
-                Grades(
-                    student=student2.id,
-                    subject="Allgemeinbildung (ABU)",
-                    date=date(2026, 1, 30),
-                    grade=5.2,
-                    title="Präsentation Lehrbetrieb",
-                    comment="Klar strukturierte Präsentation mit guten Fachbezügen.",
-                ),
-                Grades(
-                    student=student2.id,
-                    subject="Steuerungstechnik",
-                    date=date(2026, 4, 17),
-                    grade=4.8,
-                    title="SPS-Grundlagen: Ablaufsteuerung",
-                    comment="Programm funktioniert; Struktur und Kommentierung noch verbesserbar.",
-                ),
-            ]
-        )
-
-        # 8. Documents & Lernjournal & Templates
-        journal_md = (
-            "# Lernjournal KW 44 – Konventionelles Fräsen\n\n"
-            "## Ausgeführte Arbeiten\n"
-            "- Passfedernut 8H7 auf Universalfräsmaschine hergestellt\n"
-            "- Zweischneider-Schaftfräser eingespannt und angetastet\n\n"
-            "## Erkenntnisse & Reflexion\n"
-            "Beim Fräsen einer Passung muss zuerst mit Untermasfräser vorgefräst und danach die Breite mit Endmassen kontrolliert werden, bevor die Fertigmass-Zustellung erfolgt.\n"
-        )
-        j_fn, j_path = save_text_document(
-            journal_md, "Lernjournal_KW44", company.name
-        )
-        doc_journal = Documents(
-            name="Lernjournal KW 44 – Passfedernut fräsen",
-            description="Wochenreflexion Fertigungstechnik",
-            filename=j_fn,
-            path=j_path,
-            type="lernjournal",
-            owner=student1.id,
-            author=student1.id,
-            is_template=False,
-            updated_date=datetime.now(timezone.utc),
-            is_done=True,
-            feedback="Gute Reflexion zur Passfedernut. Bitte beim nächsten Mal auch die gewählten Schnittdaten (n, vf) festhalten.",
-            feedback_author=admin.id,
-        )
-
-        gespraech_md = (
-            "# Probezeitgespräch & Bildungsbericht 1. Semester\n\n"
-            "**Lernender:** Lukas Frei  \n"
-            "**Berufsbildner:** Thomas Keller  \n"
-            "**Datum:** 15.11.2024\n\n"
-            "## 1. Fachkompetenz\n"
-            "Lukas arbeitet sehr sorgfältig an den konventionellen Maschinen und hält die Sicherheitsvorschriften vorbildlich ein.\n\n"
-            "## 2. Methoden- & Sozialkompetenz\n"
-            "Freundliches Auftreten im Team, pünktlich und zuverlässig. Lerndokumentation wird regelmässig geführt.\n\n"
-            "## 3. Vereinbarte Ziele für das nächste Semester\n"
-            "- Selbstständige Vorbereitung der CNC-Grundübungen\n"
-            "- Notenschnitt in der Berufsfachschule über 5.0 halten\n"
-        )
-        g_fn, g_path = save_text_document(
-            gespraech_md, "Probezeitgespraech_Lukas_Frei", company.name
-        )
-        doc_gespraech = Documents(
-            name="Probezeitgespräch (1. Lehrjahr)",
-            description="Abgeschlossenes Probezeitgespräch mit Berufsbildner",
-            filename=g_fn,
-            path=g_path,
-            type="ausbildungsgespraech",
-            owner=student1.id,
-            author=admin.id,
-            is_template=False,
-            updated_date=datetime.now(timezone.utc),
-            is_done=True,
-        )
-
-        # Seed templates for the new "Vorlagen" section. Structure follows the
-        # SBFI Bildungsplan 46427 (Automatikmonteur/in EFZ, ab Lehrbeginn 2026):
-        # Lerndokumentation (Art. 12), Bildungsbericht (Art. 13) und die
-        # Qualifikationsbereiche Planen / Durchfuehren / Auswerten (Art. 18 QV).
-        seed_templates = [
-            {
-                "name": "Vorlage Bildungsbericht",
-                "description": "Semesterweiser Bildungsbericht mit Rückmeldungen aus allen Lernorten und vereinbarten Massnahmen (Art. 13 BiVo)",
-                "filename": "Vorlage_Bildungsbericht",
-                "type": "ausbildungsgespraech",
-                "content": (
-                    "# Bildungsbericht\n\n"
-                    "**Lernende/r:**  \n"
-                    "**Berufsbildner/in:**  \n"
-                    "**Semester:**  \n"
-                    "**Datum:**  \n\n"
-                    "## 1. Rückmeldungen aus den Lernorten\n"
-                    "### 1.1 Ausbildung im Lehrbetrieb\n"
-                    "- Verlauf und ausgeführte Arbeiten:  \n"
-                    "- Was ist besonders gut gelungen?  \n"
-                    "- Wo gab es Herausforderungen?  \n\n"
-                    "### 1.2 Berufsfachschule\n"
-                    "- Leistungen / Noten:  \n"
-                    "- Absenzen / Bemerkungen:  \n\n"
-                    "### 1.3 Überbetriebliche Kurse (üK)\n"
-                    "- Kurs(e) / Kompetenznachweise:  \n"
-                    "- Verlauf und Bemerkungen:  \n\n"
-                    "## 2. Entwicklungsstand in den Tätigkeitsbereichen\n"
-                    "| Tätigkeitsbereich | Entwicklungsstand | Bemerkungen |\n"
-                    "| --- | --- | --- |\n"
-                    "|  | erreicht / in Entwicklung / nicht erreicht |  |\n"
-                    "|  | erreicht / in Entwicklung / nicht erreicht |  |\n\n"
-                    "## 3. Vereinbarte Massnahmen\n"
-                    "| Massnahme | Ziel | Frist | Verantwortlich |\n"
-                    "| --- | --- | --- | --- |\n"
-                    "|  |  |  |  |\n\n"
-                    "### Überprüfung der Massnahmen aus dem vorigen Bericht\n"
-                    "- Umsetzung und Wirkung:  \n\n"
-                    "## 4. Beschluss\n"
-                    "Der Bildungsbericht wurde mit der lernenden Person besprochen.\n\n"
-                    "| Lernende/r | Berufsbildner/in | Datum |\n"
-                    "| --- | --- | --- |\n"
-                    "|  |  |  |"
-                ),
-            },
-            {
-                "name": "Vorlage Lernjournal-Eintrag",
-                "description": "Laufende Lerndokumentation mit ausgeführten Arbeiten, Sicherheitsthemen und Reflexion (Art. 12 BiVo)",
-                "filename": "Vorlage_Lernjournal",
-                "type": "lernjournal",
-                "content": (
-                    "# Lernjournal-Eintrag\n\n"
-                    "**Datum:**  \n"
-                    "**Dauer:**  \n"
-                    "**Arbeitsort / Auftraggeber:**  \n\n"
-                    "## 1. Ausgeführte Arbeiten\n"
-                    "1.  \n"
-                    "2.  \n\n"
-                    "## 2. Eingesetzte Werkzeuge, Maschinen und Hilfsmittel\n"
-                    "-  \n\n"
-                    "## 3. Sicherheit und Prävention\n"
-                    "- Angewandte Schutzmassnahmen:  \n"
-                    "- Präventionsthema des Tages:  \n"
-                    "- Beobachtungen / Auffälligkeiten:  \n\n"
-                    "## 4. Reflexion\n"
-                    "- Was ist gut gelungen?  \n"
-                    "- Was war herausfordernd?  \n"
-                    "- Was nehme ich mir vor?  \n\n"
-                    "## 5. Besprechung mit der Berufsbildnerin / dem Berufsbildner\n"
-                    "- [ ] Eintrag besprochen und kontrolliert\n"
-                    "- Signum / Datum:  "
-                ),
-            },
-            {
-                "name": "Vorlage Projektplanung",
-                "description": "Auftragsplanung mit Anforderungen, Zeitplan, Ressourcen und Freigabevermerk",
-                "filename": "Vorlage_Projektplanung",
-                "type": "projekt",
-                "content": (
-                    "# Projektplanung\n\n"
-                    "**Projekts-Titel:**  \n"
-                    "**Kunde / Auslöser des Auftrags:**  \n"
-                    "**Projektzeitraum:**  \n"
-                    "**Team / Beteiligte:**  \n\n"
-                    "## 1. Auftrag und Anforderungen\n"
-                    "### 1.1 Ausgangslage\n"
-                    "Beschreibung der Ausgangslage und des Auftrags...  \n\n"
-                    "### 1.2 Anforderungsliste\n"
-                    "| Nr. | Anforderung | Priorität | Bemerkungen |\n"
-                    "| --- | --- | --- | --- |\n"
-                    "| 1 |  |  |  |\n\n"
-                    "### 1.3 Rahmenbedingungen und Abgrenzungen\n"
-                    "-  \n\n"
-                    "## 2. Zeitplan\n"
-                    "| Nr. | Arbeitsphase | Start | Ende | Status (geplant) |\n"
-                    "| --- | --- | --- | --- | --- |\n"
-                    "| 1 |  |  |  |  |\n\n"
-                    "**Meilensteine:**  \n"
-                    "-  \n\n"
-                    "## 3. Ressourcen und Betriebsmittel\n"
-                    "- Materialien (Zukauf / Eigenfertigung):  \n"
-                    "- Maschinen und Werkzeuge:  \n"
-                    "- Mitarbeitende / Fremdunternehmen:  \n"
-                    "- Rahmenbudget (optional):  \n\n"
-                    "## 4. Risiken (optional)\n"
-                    "| Risiko | Massnahme zur Gegenmassnahme |\n"
-                    "| --- | --- |\n"
-                    "|  |  |\n\n"
-                    "## 5. Freigabe der Planung\n"
-                    "- [ ] Planung wurde von Auftraggeber/in bzw. Vorgesetzte/n geprüft und freigegeben\n"
-                    "- Bemerkungen:  \n\n"
-                    "| Freigabe durch | Datum |\n"
-                    "| --- | --- |\n"
-                    "|  |  |"
-                ),
-            },
-            {
-                "name": "Vorlage Projektdurchführung",
-                "description": "Laufende Fortschrittsberichte mit Abweichungen, Änderungen, Qualitätskontrollen und Abschlussauswertung",
-                "filename": "Vorlage_Projektdurchfuehrung",
-                "type": "projekt",
-                "content": (
-                    "# Projektdurchführung\n\n"
-                    "**Projekt:**  \n"
-                    "**Zeitraum:**  \n"
-                    "**Verfasser/in:**  \n\n"
-                    "## 1. Verlaufsberichte\n"
-                    "### Bericht KW ___ / Datum ___\n"
-                    "- Fortschritt gegenüber Meilensteinen:  \n"
-                    "- Ausgeführte Tätigkeiten:  \n"
-                    "- Abweichungen und Massnahmen:  \n\n"
-                    "### Bericht KW ___ / Datum ___\n"
-                    "- Fortschritt gegenüber Meilensteinen:  \n"
-                    "- Ausgeführte Tätigkeiten:  \n"
-                    "- Abweichungen und Massnahmen:  \n\n"
-                    "## 2. Änderungen\n"
-                    "| Nr. | Änderung | Grund | Auswirkung (Zeit/Kosten) | Datum |\n"
-                    "| --- | --- | --- | --- | --- |\n"
-                    "| 1 |  |  |  |  |\n\n"
-                    "## 3. Qualitätskontrolle und Prüfungen\n"
-                    "| Prüffeld / Prüfmittel | Kriterium | Soll / Ist | Resultat | Nacharbeit |\n"
-                    "| --- | --- | --- | --- | --- |\n"
-                    "|  |  |  |  |  |\n\n"
-                    "## 4. Abschluss und Auswertung\n"
-                    "### 4.1 Zielerreichung\n"
-                    "| Ziel | Erfüllt? | Anmerkung |\n"
-                    "| --- | --- | --- |\n"
-                    "|  | ja / teilweise / nein |  |\n\n"
-                    "### 4.2 Ökologie und Ökonomie\n"
-                    "- Ressourcen- und Energieeffizienz:  \n"
-                    "- Kostenblick (Budget vs. effektiv):  \n\n"
-                    "### 4.3 Reflexion und Erkenntnisse für künftige Projekte\n"
-                    "-  "
-                ),
-            },
+            for user in (admin, hr_user, fach_user, student1, student2)
         ]
-        for tpl in seed_templates:
-            fn, path = save_text_document(tpl["content"], tpl["filename"], company.name)
-            doc = Documents(
-                name=tpl["name"],
-                description=tpl["description"],
-                filename=fn,
-                path=path,
-                type=tpl["type"],
-                owner=admin.id,
-                author=admin.id,
-                is_template=True,
-                updated_date=datetime.now(timezone.utc),
-                is_done=True,
-            )
-            db.session.add(doc)
-        db.session.flush()
+    )
 
+    # 3. User Relations
+    db.session.add_all(
+        [
+            UserRelation(supervisor=admin.id, student=student1.id),
+            UserRelation(supervisor=fach_user.id, student=student1.id),
+            UserRelation(supervisor=hr_user.id, student=student1.id),
+            UserRelation(supervisor=admin.id, student=student2.id),
+            UserRelation(supervisor=hr_user.id, student=student2.id),
+        ]
+    )
 
-        vertrag_md = (
-            "# Lehrvertrag MEM-Berufe (Auszug)\n\n"
-            "**Lehrbetrieb:** Vektorwerk Technik AG, 8404 Winterthur  \n"
-            "**Lernender:** Lukas Frei  \n"
-            "**Beruf:** Polymechaniker EFZ  \n"
-            "**Lehrdauer:** 12.08.2024 – 31.07.2028  \n"
-            "**Probezeit:** 3 Monate  \n"
-            "**Ferienanspruch:** 5 Wochen pro Lehrjahr\n"
-        )
-        v_fn, v_path = save_text_document(
-            vertrag_md, "Lehrvertrag_Lukas_Frei", company.name
-        )
-        doc_vertrag = Documents(
-            name="Lehrvertrag Polymechaniker EFZ – Lukas Frei",
-            description="Kantonal genehmigter Lehrvertrag",
-            filename=v_fn,
-            path=v_path,
-            type="vertrag",
-            owner=student1.id,
-            author=hr_user.id,
-            is_template=False,
-            updated_date=datetime.now(timezone.utc),
-            is_done=True,
-        )
+    # 4. Projects, Topics & Internships
+    root_project = Project(
+        parent_project=None,
+        title="Basisausbildung 1. Lehrjahr – Konventionelle Fertigung",
+        description="Grundlagen der spanabhebenden Bearbeitung (Bohren, Drehen, Fräsen) sowie Messtechnik und Arbeitssicherheit nach EKAS.",
+        author=admin.id,
+        goals=json.dumps(
+            [
+                "Arbeitssicherheit und PSA an Dreh- und Fräsmaschinen konsequent anwenden",
+                "Werkstücke nach ISO-Toleranzen fertigen und mit Bügelmessschraube prüfen",
+                "Schnittdaten (vc, n, vf) selbstständig aus Tabellenbuch berechnen",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2024, 8, 12),
+        due_date=date(2025, 1, 31),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+        global_eval_text="Beide Lernenden haben sich rasch an die Sicherheitsregeln in der Werkstatt gewöhnt.",
+    )
+    db.session.add(root_project)
+    db.session.flush()
 
-        word_fn, word_path = save_binary_document(
-            build_word_preview_docx(), "Word_Beispiel.docx", company.name
-        )
-        doc_word = Documents(
-            name="Word-Beispielzeugnis (Vorschau, 2 Seiten)",
-            description="Mehrseitiges Beispiel eines Word-Dokuments mit Überschriften, Tabelle und Seitenumbruch",
-            filename=word_fn,
-            path=word_path,
-            type="zeugnis",
-            owner=student1.id,
+    sub_project1 = Project(
+        parent_project=root_project.id,
+        title="Aufgabe 1: Schraubstock-Spannbacken fräsen",
+        description="Herstellung eines Satzes gehärteter Spannbacken auf der konventionellen Universalfräsmaschine inkl. Prüfprotokoll.",
+        author=fach_user.id,
+        goals=json.dumps(
+            [
+                "Winkligkeit und Parallelität innerhalb 0.02 mm einhalten",
+                "Oberflächenrauhigkeit Ra 1.6 erreichen",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2024, 9, 2),
+        due_date=date(2024, 10, 18),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+
+    sub_project1b = Project(
+        parent_project=root_project.id,
+        title="Aufgabe 2: Passbolzen drehen & Messprotokoll",
+        description="Fertigung eines gestuften Passbolzens mit Passung g6 auf der Leit- und Zugspindeldrehmaschine.",
+        author=fach_user.id,
+        goals=json.dumps([]),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2024, 10, 21),
+        due_date=date(2024, 11, 29),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+
+    sub_project2 = Project(
+        parent_project=None,
+        title="Schwerpunktausbildung – CNC-Drehen & CAM-Grundlagen",
+        description="Programmierung nach ISO-Code, Werkzeugvermessung, Einrichten von Spannmitteln und Serienüberwachung.",
+        author=admin.id,
+        goals=json.dumps(
+            [
+                "Nullpunktverschiebung und Werkzeugkorrekturen fehlerfrei einrichten",
+                "Erstmusterprüfung im Messraum dokumentieren",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2025, 2, 3),
+        due_date=date(2025, 7, 18),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+    db.session.add_all([sub_project1, sub_project1b, sub_project2])
+    db.session.flush()
+
+    # 4b. Additional projects with different students and difficulty levels
+    # (einfach -> mittel -> anspruchsvoll)
+
+    # Einfach: abgeschlossenes Projekt für Elena
+    p_pneumatik = Project(
+        parent_project=None,
+        title="Pneumatik-Hubvorrichtung montieren",
+        description="Einfaches Einstiegsprojekt: Eine pneumatische Hubvorrichtung nach Plan aufbauen, verdrahten und auf Dichtheit prüfen.",
+        author=fach_user.id,
+        goals=json.dumps(
+            [
+                "Pneumatikplan lesen und Bauteile korrekt zuordnen",
+                "Zylinder, Ventile und Drosseln normgerecht montieren",
+                "Dichtheit und Endlagen mit Lecksuchspray und Manometer prüfen",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2025, 9, 15),
+        due_date=date(2025, 10, 10),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+        global_eval_text="Elena hat die Hubvorrichtung selbstständig und sauber montiert. Die Funktionsprüfung war vollständig dokumentiert.",
+    )
+    db.session.add(p_pneumatik)
+    db.session.flush()
+
+    task_pneumatik_plan = Project(
+        parent_project=p_pneumatik.id,
+        title="Aufgabe 1: Pneumatikplan lesen und Bauteile bereitstellen",
+        description="Stückliste und Pneumatikplan vergleichen, benötigte Ventile, Zylinder und Fittings bereitstellen.",
+        author=fach_user.id,
+        goals=json.dumps(["Stückliste mit Plan abgleichen"], ensure_ascii=False),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2025, 9, 15),
+        due_date=date(2025, 9, 26),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+    task_pneumatik_montage = Project(
+        parent_project=p_pneumatik.id,
+        title="Aufgabe 2: Hubvorrichtung montieren und Dichtheit prüfen",
+        description="Zylinder, Ventile und Drosseln montieren, Verschraubungen anziehen und die Anlage auf Dichtheit prüfen.",
+        author=fach_user.id,
+        goals=json.dumps(
+            ["Alle Verschraubungen mit korrektem Drehmoment anziehen"],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2025, 9, 29),
+        due_date=date(2025, 10, 10),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+
+    # Einfach: abgeschlossenes Projekt für Lukas
+    p_werkzeug = Project(
+        parent_project=None,
+        title="Werkzeugkunde: Schneidwerkzeuge instand halten",
+        description="Einfaches Projekt zur Pflege und Beurteilung von Bohrern, Gewindebohrern und Fräsern inkl. Schleif- und Prüfprotokoll.",
+        author=admin.id,
+        goals=json.dumps(
+            [
+                "Schneidwerkzeuge nach Verschleissbild beurteilen",
+                "Bohrer mit der Schleifvorrichtung korrekt anschleifen",
+                "Werkzeugausgabe und Prüfprotokoll nachführen",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2025, 9, 1),
+        due_date=date(2025, 9, 19),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+        global_eval_text="Lukas beurteilt Verschleissbilder zuverlässig und arbeitet beim Anschleifen sehr genau.",
+    )
+    db.session.add(p_werkzeug)
+    db.session.flush()
+
+    task_werkzeug_schleifen = Project(
+        parent_project=p_werkzeug.id,
+        title="Aufgabe 1: Bohrersatz prüfen und anschleifen",
+        description="Verschlissene Bohrer aussortieren, mit der Schleifvorrichtung anschleifen und die Schneidengeometrie prüfen.",
+        author=admin.id,
+        goals=json.dumps(["Freiwinkel und Spitzenwinkel kontrollieren"], ensure_ascii=False),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2025, 9, 1),
+        due_date=date(2025, 9, 12),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+    task_werkzeug_inventar = Project(
+        parent_project=p_werkzeug.id,
+        title="Aufgabe 2: Werkzeugausgabe inventarisieren",
+        description="Werkzeugbestand aufnehmen, beschädigte Werkzeuge kennzeichnen und fehlende Positionen nachbestellen.",
+        author=admin.id,
+        goals=json.dumps(["Inventarliste vollständig und nachvollziehbar führen"], ensure_ascii=False),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2025, 9, 15),
+        due_date=date(2025, 9, 19),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+
+    # Mittel: laufendes Projekt für Elena
+    p_schaltung = Project(
+        parent_project=None,
+        title="Motorsteuerung mit Schützschaltung aufbauen",
+        description="Mittleres Projekt: Steuerung eines Drehstrommotors mit Schützen, Tastern und Selbsthaltung nach Schaltplan aufbauen und prüfen.",
+        author=fach_user.id,
+        goals=json.dumps(
+            [
+                "Schaltplan in eine sichere Verdrahtung umsetzen",
+                "Selbsthaltung und Verriegelung funktional testen",
+                "Messwerte mit Multimeter und Stromzange dokumentieren",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2025, 11, 3),
+        due_date=date(2025, 12, 12),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+    db.session.add(p_schaltung)
+    db.session.flush()
+
+    task_schaltung_plan = Project(
+        parent_project=p_schaltung.id,
+        title="Aufgabe 1: Schaltplan analysieren und Material bereitstellen",
+        description="Schaltplan lesen, benötigte Schütze, Taster und Leiterquerschnitte bestimmen und Material bereitstellen.",
+        author=fach_user.id,
+        goals=json.dumps(["Benötigte Betriebsmittel korrekt bestimmen"], ensure_ascii=False),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2025, 11, 3),
+        due_date=date(2025, 11, 14),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+    task_schaltung_verdrahten = Project(
+        parent_project=p_schaltung.id,
+        title="Aufgabe 2: Schaltung verdrahten und messtechnisch prüfen",
+        description="Schaltung nach Plan verdrahten, Funktion der Selbsthaltung testen und Spannungen sowie Ströme messen.",
+        author=fach_user.id,
+        goals=json.dumps(
+            ["Spannungs- und Strommessungen nachvollziehbar protokollieren"],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2025, 11, 17),
+        due_date=date(2025, 12, 12),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+
+    # Mittel: laufendes Projekt für Lukas
+    p_getriebe = Project(
+        parent_project=None,
+        title="Getriebemontage nach technischer Zeichnung",
+        description="Mittleres Projekt: Ein zweistufiges Stirnradgetriebe nach Zeichnung montieren, ausrichten und die Endkontrolle dokumentieren.",
+        author=admin.id,
+        goals=json.dumps(
+            [
+                "Montagereihenfolge anhand der Zeichnung festlegen",
+                "Lager und Wellen beschädigungsfrei montieren",
+                "Zahnflankenspiel und Leichtlauf prüfen",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2026, 1, 12),
+        due_date=date(2026, 2, 27),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+    db.session.add(p_getriebe)
+    db.session.flush()
+
+    task_getriebe_vorbereiten = Project(
+        parent_project=p_getriebe.id,
+        title="Aufgabe 1: Bauteile prüfen und Montagereihenfolge festlegen",
+        description="Alle Bauteile auf Vollständigkeit und Beschädigungen prüfen, Reinigung durchführen und die Montagereihenfolge dokumentieren.",
+        author=admin.id,
+        goals=json.dumps(["Montageanleitung und Zeichnung konsistent umsetzen"], ensure_ascii=False),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2026, 1, 12),
+        due_date=date(2026, 1, 23),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+    task_getriebe_montieren = Project(
+        parent_project=p_getriebe.id,
+        title="Aufgabe 2: Getriebe montieren, ausrichten und Endkontrolle",
+        description="Wellen und Lager montieren, Gehäuse ausrichten, Zahnflankenspiel messen und die Endkontrolle durchführen.",
+        author=admin.id,
+        goals=json.dumps(
+            ["Zahnflankenspiel innerhalb der Zeichnungsvorgabe einstellen"],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id]),
+        start_date=date(2026, 1, 26),
+        due_date=date(2026, 2, 27),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+
+    # Anspruchsvoll: laufendes Projekt für Elena
+    p_sps = Project(
+        parent_project=None,
+        title="SPS-gesteuerte Sortieranlage in Betrieb nehmen",
+        description="Anspruchsvolles Projekt: Sensorik, Aktorik und SPS-Programm einer Sortieranlage zusammenführen, simulieren und in Betrieb nehmen.",
+        author=admin.id,
+        goals=json.dumps(
+            [
+                "Sensorik und Aktorik nach Stromlaufplan verdrahten",
+                "SPS-Programm strukturiert erstellen und simulieren",
+                "Anlage sicher einrichten, testen und dokumentieren",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2026, 3, 16),
+        due_date=date(2026, 6, 26),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+    db.session.add(p_sps)
+    db.session.flush()
+
+    task_sps_verdrahten = Project(
+        parent_project=p_sps.id,
+        title="Aufgabe 1: Sensorik und Aktorik am Prüfstand verdrahten",
+        description="Induktive, optische und kapazitive Sensoren sowie Ventile und Motoren nach Stromlaufplan anschliessen.",
+        author=admin.id,
+        goals=json.dumps(["Alle Signal- und Versorgungsleitungen korrekt auflegen"], ensure_ascii=False),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2026, 3, 16),
+        due_date=date(2026, 4, 10),
+        is_published=True,
+        planning_released=True,
+        is_completed=True,
+    )
+    task_sps_programm = Project(
+        parent_project=p_sps.id,
+        title="Aufgabe 2: SPS-Programm erstellen und simulieren",
+        description="Ablaufsteuerung mit Schritten und Verzweigungen programmieren, Variablen benennen und die Simulation testen.",
+        author=admin.id,
+        goals=json.dumps(["Programm lesbar strukturieren und kommentieren"], ensure_ascii=False),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2026, 4, 13),
+        due_date=date(2026, 5, 22),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+    task_sps_inbetriebnahme = Project(
+        parent_project=p_sps.id,
+        title="Aufgabe 3: Anlage einrichten, testen und dokumentieren",
+        description="Anlage im Einzelsatz und Automatikbetrieb testen, Störungen beheben und die Inbetriebnahme dokumentieren.",
+        author=admin.id,
+        goals=json.dumps(["Inbetriebnahmeprotokoll vollständig führen"], ensure_ascii=False),
+        assigned_students=json.dumps([student2.id]),
+        start_date=date(2026, 5, 26),
+        due_date=date(2026, 6, 26),
+        is_published=True,
+        planning_released=True,
+        is_completed=False,
+    )
+
+    # Anspruchsvoll: Entwurf für beide Lernenden
+    p_bildverarbeitung = Project(
+        parent_project=None,
+        title="Bildverarbeitung: automatische Qualitätsprüfung",
+        description="Anspruchsvolles Projekt: Eine kamerabasierte Qualitätsprüfung mit Roboterübergabe konzipieren, aufbauen und auswerten.",
+        author=admin.id,
+        goals=json.dumps(
+            [
+                "Prüfmerkmale und Beleuchtung definieren",
+                "Kamerasystem kalibrieren und Prüfprogramm erstellen",
+                "Ausschussquoten auswerten und Verbesserungen ableiten",
+            ],
+            ensure_ascii=False,
+        ),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2026, 8, 17),
+        due_date=date(2026, 12, 18),
+        is_published=False,
+        planning_released=False,
+        is_completed=False,
+    )
+    db.session.add(p_bildverarbeitung)
+    db.session.flush()
+
+    task_bild_pruefkonzept = Project(
+        parent_project=p_bildverarbeitung.id,
+        title="Aufgabe 1: Prüfkonzept und Beleuchtung definieren",
+        description="Zu prüfende Merkmale festlegen, Beleuchtungsszenarien vergleichen und das Prüfkonzept dokumentieren.",
+        author=admin.id,
+        goals=json.dumps(["Prüfmerkmale messbar beschreiben"], ensure_ascii=False),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2026, 8, 17),
+        due_date=date(2026, 9, 11),
+        is_published=False,
+        planning_released=False,
+        is_completed=False,
+    )
+    task_bild_kalibrieren = Project(
+        parent_project=p_bildverarbeitung.id,
+        title="Aufgabe 2: Kamerasystem kalibrieren und Prüfprogramm erstellen",
+        description="Kamera und Beleuchtung einrichten, Kalibrierung durchführen und ein Prüfprogramm mit Toleranzgrenzen erstellen.",
+        author=admin.id,
+        goals=json.dumps(["Kalibrierung reproduzierbar dokumentieren"], ensure_ascii=False),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2026, 9, 14),
+        due_date=date(2026, 11, 6),
+        is_published=False,
+        planning_released=False,
+        is_completed=False,
+    )
+    task_bild_auswerten = Project(
+        parent_project=p_bildverarbeitung.id,
+        title="Aufgabe 3: Testreihe auswerten und dokumentieren",
+        description="Testreihe mit Gut- und Schlechtteilen durchführen, Ausschussquote berechnen und Verbesserungen vorschlagen.",
+        author=admin.id,
+        goals=json.dumps(["Auswertung mit Kennzahlen und Massnahmen belegen"], ensure_ascii=False),
+        assigned_students=json.dumps([student1.id, student2.id]),
+        start_date=date(2026, 11, 9),
+        due_date=date(2026, 12, 18),
+        is_published=False,
+        planning_released=False,
+        is_completed=False,
+    )
+
+    db.session.add_all(
+        [
+            task_pneumatik_plan,
+            task_pneumatik_montage,
+            task_werkzeug_schleifen,
+            task_werkzeug_inventar,
+            task_schaltung_plan,
+            task_schaltung_verdrahten,
+            task_getriebe_vorbereiten,
+            task_getriebe_montieren,
+            task_sps_verdrahten,
+            task_sps_programm,
+            task_sps_inbetriebnahme,
+            task_bild_pruefkonzept,
+            task_bild_kalibrieren,
+            task_bild_auswerten,
+        ]
+    )
+    db.session.flush()
+
+    # 5. Participations (/api/implementation)
+    part1 = Participation(
+        supervisor=fach_user.id,
+        student=student1.id,
+        project=sub_project1.id,
+        title=sub_project1.title,
+        text="Rohteil aus 16MnCr5 auf der Bandsäge mit 3 mm Aufmass zugesägt. Anschliessend mit Messerkopf alle 6 Seiten im Schraubstock winklig und parallel vorbearbeitet. Alle Masse im Toleranzfeld.",
+        is_done=True,
+    )
+    part2 = Participation(
+        supervisor=admin.id,
+        student=student1.id,
+        project=sub_project2.id,
+        title=sub_project2.title,
+        text="ISO-Programm für Schrupp- und Schlichtzyklus geschrieben. Simulation durchgeführt; Einfahren im Einzelsatz steht noch aus.",
+        is_done=False,
+    )
+    part_pneumatik_plan = Participation(
+        supervisor=fach_user.id,
+        student=student2.id,
+        project=task_pneumatik_plan.id,
+        title=task_pneumatik_plan.title,
+        text="Stückliste mit dem Pneumatikplan abgeglichen. Alle Ventile, Zylinder und Fittings waren vorhanden; zwei Dichtringe wurden ersetzt.",
+        is_done=True,
+    )
+    part_pneumatik_montage = Participation(
+        supervisor=fach_user.id,
+        student=student2.id,
+        project=task_pneumatik_montage.id,
+        title=task_pneumatik_montage.title,
+        text="Hubvorrichtung montiert und alle Verschraubungen mit dem Drehmomentschlüssel angezogen. Dichtheitsprüfung mit Lecksuchspray ohne Befund.",
+        is_done=True,
+    )
+    part_werkzeug_schleifen = Participation(
+        supervisor=admin.id,
+        student=student1.id,
+        project=task_werkzeug_schleifen.id,
+        title=task_werkzeug_schleifen.title,
+        text="Acht Bohrer geprüft, vier als verschlissen aussortiert und die übrigen mit der Schleifvorrichtung neu angeschliffen. Spitzenwinkel kontrolliert.",
+        is_done=True,
+    )
+    part_schaltung_plan = Participation(
+        supervisor=fach_user.id,
+        student=student2.id,
+        project=task_schaltung_plan.id,
+        title=task_schaltung_plan.title,
+        text="Schaltplan analysiert und die benötigten Schütze, Taster sowie Leiterquerschnitte bestimmt. Material vollständig bereitgestellt.",
+        is_done=True,
+    )
+    part_getriebe_vorbereiten = Participation(
+        supervisor=admin.id,
+        student=student1.id,
+        project=task_getriebe_vorbereiten.id,
+        title=task_getriebe_vorbereiten.title,
+        text="Alle Bauteile gereinigt und auf Beschädigungen geprüft. Montagereihenfolge anhand der Zeichnung festgelegt und dokumentiert.",
+        is_done=True,
+    )
+    part_sps_verdrahten = Participation(
+        supervisor=admin.id,
+        student=student2.id,
+        project=task_sps_verdrahten.id,
+        title=task_sps_verdrahten.title,
+        text="Sensoren und Aktoren am Prüfstand nach Stromlaufplan verdrahtet. Alle Signal- und Versorgungsleitungen mit Kabelbindern sauber geführt.",
+        is_done=True,
+    )
+    db.session.add_all(
+        [
+            part1,
+            part2,
+            part_pneumatik_plan,
+            part_pneumatik_montage,
+            part_werkzeug_schleifen,
+            part_schaltung_plan,
+            part_getriebe_vorbereiten,
+            part_sps_verdrahten,
+        ]
+    )
+    db.session.flush()
+
+    # 6. Evaluations (/api/evaluation)
+    eval_proj = Eval(
+        project=root_project.id,
+        target_type="project",
+        goal=root_project.title,
+        student=student1.id,
+        supervisor=admin.id,
+        eval_text="Lukas arbeitet sehr sorgfältig und strukturiert an den konventionellen Maschinen.",
+        score_type="grade",
+        score_value=5.4,
+        is_released=True,
+        eval_released=True,
+    )
+    eval1 = Eval(
+        project=sub_project1.id,
+        participation=part1.id,
+        target_type="task",
+        goal=sub_project1.title,
+        student=student1.id,
+        supervisor=fach_user.id,
+        planning_text="Sauberes Entgraten nach jedem Aufspannen und Kontrolle der Auflagefläche mit Messuhr.",
+        eval_text="Sehr exakte Arbeitsweise. Prüfprotokoll zeigt Abweichungen von max. 0.01 mm. Ziel vollumfänglich erreicht (A).",
+        score_type="grade",
+        score_value=5.5,
+        is_released=True,
+        eval_released=True,
+    )
+    eval_goal1 = Eval(
+        project=root_project.id,
+        target_type="goal",
+        goal="Arbeitssicherheit und PSA an Dreh- und Fräsmaschinen konsequent anwenden",
+        student=student1.id,
+        supervisor=admin.id,
+        eval_text="Vorbildliche Einhaltung der SUVA-Regeln (Schutzbrille, Spänehaken).",
+        is_released=True,
+        eval_released=True,
+    )
+    eval_pneumatik_project = Eval(
+        project=p_pneumatik.id,
+        target_type="project",
+        goal=p_pneumatik.title,
+        student=student2.id,
+        supervisor=fach_user.id,
+        eval_text="Elena hat das Einstiegsprojekt selbstständig umgesetzt und die Dichtheitsprüfung sauber dokumentiert.",
+        score_type="grade",
+        score_value=5.3,
+        is_released=True,
+        eval_released=True,
+    )
+    eval_pneumatik_task = Eval(
+        project=task_pneumatik_montage.id,
+        participation=part_pneumatik_montage.id,
+        target_type="task",
+        goal=task_pneumatik_montage.title,
+        student=student2.id,
+        supervisor=fach_user.id,
+        eval_text="Sorgfältige Montage, korrekte Drehmomente und eine vollständige Funktionsprüfung.",
+        score_type="grade",
+        score_value=5.4,
+        is_released=True,
+        eval_released=True,
+    )
+    eval_werkzeug_project = Eval(
+        project=p_werkzeug.id,
+        target_type="project",
+        goal=p_werkzeug.title,
+        student=student1.id,
+        supervisor=admin.id,
+        eval_text="Lukas beurteilt den Werkzeugverschleiss sicher und führt das Inventar zuverlässig nach.",
+        score_type="grade",
+        score_value=5.0,
+        is_released=True,
+        eval_released=True,
+    )
+    eval_getriebe_task = Eval(
+        project=task_getriebe_vorbereiten.id,
+        participation=part_getriebe_vorbereiten.id,
+        target_type="task",
+        goal=task_getriebe_vorbereiten.title,
+        student=student1.id,
+        supervisor=admin.id,
+        eval_text="Bauteile vollständig geprüft und die Montagereihenfolge nachvollziehbar hergeleitet.",
+        score_type="grade",
+        score_value=5.1,
+        is_released=True,
+        eval_released=True,
+    )
+    eval_sps_project = Eval(
+        project=p_sps.id,
+        target_type="project",
+        goal=p_sps.title,
+        student=student2.id,
+        supervisor=admin.id,
+        eval_text="Elena arbeitet sehr strukturiert an der Verdrahtung. Die Inbetriebnahme ist noch nicht abgeschlossen.",
+        score_type=None,
+        score_value=None,
+        is_released=False,
+        eval_released=False,
+    )
+    db.session.add_all(
+        [
+            eval_proj,
+            eval1,
+            eval_goal1,
+            eval_pneumatik_project,
+            eval_pneumatik_task,
+            eval_werkzeug_project,
+            eval_getriebe_task,
+            eval_sps_project,
+        ]
+    )
+
+    # 7. Grades (/api/grades)
+    db.session.add_all(
+        [
+            Grades(
+                student=student1.id,
+                subject="Technische Grundlagen (Mathematik & Physik)",
+                date=date(2025, 10, 15),
+                grade=5.2,
+                title="Kräfteberechnung & Drehmoment",
+                comment="Sehr gute Herleitung der Gleichgewichtsbedingungen.",
+            ),
+            Grades(
+                student=student1.id,
+                subject="Werkstoff- und Fertigungstechnik",
+                date=date(2025, 11, 20),
+                grade=5.5,
+                title="Eisen-Kohlenstoff-Diagramm & Wärmebehandlung",
+                comment="Härteverfahren sicher beherrscht.",
+            ),
+            Grades(
+                student=student1.id,
+                subject="Zeichnungstechnik / CAD",
+                date=date(2025, 12, 10),
+                grade=4.8,
+                title="Baugruppenzeichnung & Form- und Lagetoleranzen",
+                comment="Schnittdarstellung korrekt, Oberflächensymbole beachten.",
+            ),
+            Grades(
+                student=student1.id,
+                subject="Allgemeinbildung (ABU)",
+                date=date(2026, 1, 22),
+                grade=5.0,
+                title="Recht & Obligationenrecht (Lehrvertrag)",
+                comment="",
+            ),
+            Grades(
+                student=student2.id,
+                subject="Montagetechnik",
+                date=date(2025, 10, 24),
+                grade=5.3,
+                title="Pneumatik-Hubvorrichtung montieren",
+                comment="Saubere Montage und vollständige Dichtheitsprüfung.",
+            ),
+            Grades(
+                student=student2.id,
+                subject="Elektrotechnik",
+                date=date(2025, 12, 19),
+                grade=5.0,
+                title="Motorsteuerung mit Schützschaltung",
+                comment="Schaltung korrekt verdrahtet, Messprotokoll nachvollziehbar.",
+            ),
+            Grades(
+                student=student2.id,
+                subject="Allgemeinbildung (ABU)",
+                date=date(2026, 1, 30),
+                grade=5.2,
+                title="Präsentation Lehrbetrieb",
+                comment="Klar strukturierte Präsentation mit guten Fachbezügen.",
+            ),
+            Grades(
+                student=student2.id,
+                subject="Steuerungstechnik",
+                date=date(2026, 4, 17),
+                grade=4.8,
+                title="SPS-Grundlagen: Ablaufsteuerung",
+                comment="Programm funktioniert; Struktur und Kommentierung noch verbesserbar.",
+            ),
+        ]
+    )
+
+    # 8. Documents & Lernjournal & Templates
+    journal_md = (
+        "# Lernjournal KW 44 – Konventionelles Fräsen\n\n"
+        "## Ausgeführte Arbeiten\n"
+        "- Passfedernut 8H7 auf Universalfräsmaschine hergestellt\n"
+        "- Zweischneider-Schaftfräser eingespannt und angetastet\n\n"
+        "## Erkenntnisse & Reflexion\n"
+        "Beim Fräsen einer Passung muss zuerst mit Untermasfräser vorgefräst und danach die Breite mit Endmassen kontrolliert werden, bevor die Fertigmass-Zustellung erfolgt.\n"
+    )
+    j_fn, j_path = save_text_document(
+        journal_md, "Lernjournal_KW44", company.name
+    )
+    doc_journal = Documents(
+        name="Lernjournal KW 44 – Passfedernut fräsen",
+        description="Wochenreflexion Fertigungstechnik",
+        filename=j_fn,
+        path=j_path,
+        type="lernjournal",
+        owner=student1.id,
+        author=student1.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+        feedback="Gute Reflexion zur Passfedernut. Bitte beim nächsten Mal auch die gewählten Schnittdaten (n, vf) festhalten.",
+        feedback_author=admin.id,
+    )
+
+    gespraech_md = (
+        "# Probezeitgespräch & Bildungsbericht 1. Semester\n\n"
+        "**Lernender:** Lukas Frei  \n"
+        "**Berufsbildner:** Thomas Keller  \n"
+        "**Datum:** 15.11.2024\n\n"
+        "## 1. Fachkompetenz\n"
+        "Lukas arbeitet sehr sorgfältig an den konventionellen Maschinen und hält die Sicherheitsvorschriften vorbildlich ein.\n\n"
+        "## 2. Methoden- & Sozialkompetenz\n"
+        "Freundliches Auftreten im Team, pünktlich und zuverlässig. Lerndokumentation wird regelmässig geführt.\n\n"
+        "## 3. Vereinbarte Ziele für das nächste Semester\n"
+        "- Selbstständige Vorbereitung der CNC-Grundübungen\n"
+        "- Notenschnitt in der Berufsfachschule über 5.0 halten\n"
+    )
+    g_fn, g_path = save_text_document(
+        gespraech_md, "Probezeitgespraech_Lukas_Frei", company.name
+    )
+    doc_gespraech = Documents(
+        name="Probezeitgespräch (1. Lehrjahr)",
+        description="Abgeschlossenes Probezeitgespräch mit Berufsbildner",
+        filename=g_fn,
+        path=g_path,
+        type="ausbildungsgespraech",
+        owner=student1.id,
+        author=admin.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+
+    # Seed templates for the new "Vorlagen" section. Structure follows the
+    # SBFI Bildungsplan 46427 (Automatikmonteur/in EFZ, ab Lehrbeginn 2026):
+    # Lerndokumentation (Art. 12), Bildungsbericht (Art. 13) und die
+    # Qualifikationsbereiche Planen / Durchfuehren / Auswerten (Art. 18 QV).
+    seed_templates = [
+        {
+            "name": "Vorlage Bildungsbericht",
+            "description": "Semesterweiser Bildungsbericht mit Rückmeldungen aus allen Lernorten und vereinbarten Massnahmen (Art. 13 BiVo)",
+            "filename": "Vorlage_Bildungsbericht",
+            "type": "ausbildungsgespraech",
+            "content": (
+                "# Bildungsbericht\n\n"
+                "**Lernende/r:**  \n"
+                "**Berufsbildner/in:**  \n"
+                "**Semester:**  \n"
+                "**Datum:**  \n\n"
+                "## 1. Rückmeldungen aus den Lernorten\n"
+                "### 1.1 Ausbildung im Lehrbetrieb\n"
+                "- Verlauf und ausgeführte Arbeiten:  \n"
+                "- Was ist besonders gut gelungen?  \n"
+                "- Wo gab es Herausforderungen?  \n\n"
+                "### 1.2 Berufsfachschule\n"
+                "- Leistungen / Noten:  \n"
+                "- Absenzen / Bemerkungen:  \n\n"
+                "### 1.3 Überbetriebliche Kurse (üK)\n"
+                "- Kurs(e) / Kompetenznachweise:  \n"
+                "- Verlauf und Bemerkungen:  \n\n"
+                "## 2. Entwicklungsstand in den Tätigkeitsbereichen\n"
+                "| Tätigkeitsbereich | Entwicklungsstand | Bemerkungen |\n"
+                "| --- | --- | --- |\n"
+                "|  | erreicht / in Entwicklung / nicht erreicht |  |\n"
+                "|  | erreicht / in Entwicklung / nicht erreicht |  |\n\n"
+                "## 3. Vereinbarte Massnahmen\n"
+                "| Massnahme | Ziel | Frist | Verantwortlich |\n"
+                "| --- | --- | --- | --- |\n"
+                "|  |  |  |  |\n\n"
+                "### Überprüfung der Massnahmen aus dem vorigen Bericht\n"
+                "- Umsetzung und Wirkung:  \n\n"
+                "## 4. Beschluss\n"
+                "Der Bildungsbericht wurde mit der lernenden Person besprochen.\n\n"
+                "| Lernende/r | Berufsbildner/in | Datum |\n"
+                "| --- | --- | --- |\n"
+                "|  |  |  |"
+            ),
+        },
+        {
+            "name": "Vorlage Lernjournal-Eintrag",
+            "description": "Laufende Lerndokumentation mit ausgeführten Arbeiten, Sicherheitsthemen und Reflexion (Art. 12 BiVo)",
+            "filename": "Vorlage_Lernjournal",
+            "type": "lernjournal",
+            "content": (
+                "# Lernjournal-Eintrag\n\n"
+                "**Datum:**  \n"
+                "**Dauer:**  \n"
+                "**Arbeitsort / Auftraggeber:**  \n\n"
+                "## 1. Ausgeführte Arbeiten\n"
+                "1.  \n"
+                "2.  \n\n"
+                "## 2. Eingesetzte Werkzeuge, Maschinen und Hilfsmittel\n"
+                "-  \n\n"
+                "## 3. Sicherheit und Prävention\n"
+                "- Angewandte Schutzmassnahmen:  \n"
+                "- Präventionsthema des Tages:  \n"
+                "- Beobachtungen / Auffälligkeiten:  \n\n"
+                "## 4. Reflexion\n"
+                "- Was ist gut gelungen?  \n"
+                "- Was war herausfordernd?  \n"
+                "- Was nehme ich mir vor?  \n\n"
+                "## 5. Besprechung mit der Berufsbildnerin / dem Berufsbildner\n"
+                "- [ ] Eintrag besprochen und kontrolliert\n"
+                "- Signum / Datum:  "
+            ),
+        },
+        {
+            "name": "Vorlage Projektplanung",
+            "description": "Auftragsplanung mit Anforderungen, Zeitplan, Ressourcen und Freigabevermerk",
+            "filename": "Vorlage_Projektplanung",
+            "type": "projekt",
+            "content": (
+                "# Projektplanung\n\n"
+                "**Projekts-Titel:**  \n"
+                "**Kunde / Auslöser des Auftrags:**  \n"
+                "**Projektzeitraum:**  \n"
+                "**Team / Beteiligte:**  \n\n"
+                "## 1. Auftrag und Anforderungen\n"
+                "### 1.1 Ausgangslage\n"
+                "Beschreibung der Ausgangslage und des Auftrags...  \n\n"
+                "### 1.2 Anforderungsliste\n"
+                "| Nr. | Anforderung | Priorität | Bemerkungen |\n"
+                "| --- | --- | --- | --- |\n"
+                "| 1 |  |  |  |\n\n"
+                "### 1.3 Rahmenbedingungen und Abgrenzungen\n"
+                "-  \n\n"
+                "## 2. Zeitplan\n"
+                "| Nr. | Arbeitsphase | Start | Ende | Status (geplant) |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| 1 |  |  |  |  |\n\n"
+                "**Meilensteine:**  \n"
+                "-  \n\n"
+                "## 3. Ressourcen und Betriebsmittel\n"
+                "- Materialien (Zukauf / Eigenfertigung):  \n"
+                "- Maschinen und Werkzeuge:  \n"
+                "- Mitarbeitende / Fremdunternehmen:  \n"
+                "- Rahmenbudget (optional):  \n\n"
+                "## 4. Risiken (optional)\n"
+                "| Risiko | Massnahme zur Gegenmassnahme |\n"
+                "| --- | --- |\n"
+                "|  |  |\n\n"
+                "## 5. Freigabe der Planung\n"
+                "- [ ] Planung wurde von Auftraggeber/in bzw. Vorgesetzte/n geprüft und freigegeben\n"
+                "- Bemerkungen:  \n\n"
+                "| Freigabe durch | Datum |\n"
+                "| --- | --- |\n"
+                "|  |  |"
+            ),
+        },
+        {
+            "name": "Vorlage Projektdurchführung",
+            "description": "Laufende Fortschrittsberichte mit Abweichungen, Änderungen, Qualitätskontrollen und Abschlussauswertung",
+            "filename": "Vorlage_Projektdurchfuehrung",
+            "type": "projekt",
+            "content": (
+                "# Projektdurchführung\n\n"
+                "**Projekt:**  \n"
+                "**Zeitraum:**  \n"
+                "**Verfasser/in:**  \n\n"
+                "## 1. Verlaufsberichte\n"
+                "### Bericht KW ___ / Datum ___\n"
+                "- Fortschritt gegenüber Meilensteinen:  \n"
+                "- Ausgeführte Tätigkeiten:  \n"
+                "- Abweichungen und Massnahmen:  \n\n"
+                "### Bericht KW ___ / Datum ___\n"
+                "- Fortschritt gegenüber Meilensteinen:  \n"
+                "- Ausgeführte Tätigkeiten:  \n"
+                "- Abweichungen und Massnahmen:  \n\n"
+                "## 2. Änderungen\n"
+                "| Nr. | Änderung | Grund | Auswirkung (Zeit/Kosten) | Datum |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| 1 |  |  |  |  |\n\n"
+                "## 3. Qualitätskontrolle und Prüfungen\n"
+                "| Prüffeld / Prüfmittel | Kriterium | Soll / Ist | Resultat | Nacharbeit |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "|  |  |  |  |  |\n\n"
+                "## 4. Abschluss und Auswertung\n"
+                "### 4.1 Zielerreichung\n"
+                "| Ziel | Erfüllt? | Anmerkung |\n"
+                "| --- | --- | --- |\n"
+                "|  | ja / teilweise / nein |  |\n\n"
+                "### 4.2 Ökologie und Ökonomie\n"
+                "- Ressourcen- und Energieeffizienz:  \n"
+                "- Kostenblick (Budget vs. effektiv):  \n\n"
+                "### 4.3 Reflexion und Erkenntnisse für künftige Projekte\n"
+                "-  "
+            ),
+        },
+    ]
+    for tpl in seed_templates:
+        fn, path = save_text_document(tpl["content"], tpl["filename"], company.name)
+        doc = Documents(
+            name=tpl["name"],
+            description=tpl["description"],
+            filename=fn,
+            path=path,
+            type=tpl["type"],
+            owner=admin.id,
             author=admin.id,
+            is_template=True,
+            updated_date=datetime.now(timezone.utc),
+            is_done=True,
+        )
+        db.session.add(doc)
+    db.session.flush()
+
+
+    vertrag_md = (
+        "# Lehrvertrag MEM-Berufe (Auszug)\n\n"
+        "**Lehrbetrieb:** Vektorwerk Technik AG, 8404 Winterthur  \n"
+        "**Lernender:** Lukas Frei  \n"
+        "**Beruf:** Polymechaniker EFZ  \n"
+        "**Lehrdauer:** 12.08.2024 – 31.07.2028  \n"
+        "**Probezeit:** 3 Monate  \n"
+        "**Ferienanspruch:** 5 Wochen pro Lehrjahr\n"
+    )
+    v_fn, v_path = save_text_document(
+        vertrag_md, "Lehrvertrag_Lukas_Frei", company.name
+    )
+    doc_vertrag = Documents(
+        name="Lehrvertrag Polymechaniker EFZ – Lukas Frei",
+        description="Kantonal genehmigter Lehrvertrag",
+        filename=v_fn,
+        path=v_path,
+        type="vertrag",
+        owner=student1.id,
+        author=hr_user.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+
+    word_fn, word_path = save_binary_document(
+        build_word_preview_docx(), "Word_Beispiel.docx", company.name
+    )
+    doc_word = Documents(
+        name="Word-Beispielzeugnis (Vorschau, 2 Seiten)",
+        description="Mehrseitiges Beispiel eines Word-Dokuments mit Überschriften, Tabelle und Seitenumbruch",
+        filename=word_fn,
+        path=word_path,
+        type="zeugnis",
+        owner=student1.id,
+        author=admin.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+
+    pdf_fn, pdf_path = save_binary_document(
+        build_pdf_preview(), "PDF_Beispiel.pdf", company.name
+    )
+    doc_pdf = Documents(
+        name="PDF-Beispielkursnachweis (Vorschau, 2 Seiten)",
+        description="Mehrseitiges Beispiel eines PDF-Dokuments mit Text, Tabelle und Seitenumbruch",
+        filename=pdf_fn,
+        path=pdf_path,
+        type="kursnachweis",
+        owner=student1.id,
+        author=admin.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+
+    db.session.add_all(
+        [doc_journal, doc_gespraech, doc_vertrag, doc_word, doc_pdf]
+    )
+    db.session.flush()
+
+    # 9. Knowledge Base (Wissen: Thema -> Seite)
+    def add_knowledge(title, description, content, parent_id=None, owner_user=admin):
+        filename, path = save_text_document(content, title, company.name)
+        doc = Documents(
+            name=title,
+            description=description,
+            filename=filename,
+            path=path,
+            type="wissen",
+            owner=owner_user.id,
+            author=owner_user.id,
             is_template=False,
             updated_date=datetime.now(timezone.utc),
             is_done=True,
         )
-
-        pdf_fn, pdf_path = save_binary_document(
-            build_pdf_preview(), "PDF_Beispiel.pdf", company.name
-        )
-        doc_pdf = Documents(
-            name="PDF-Beispielkursnachweis (Vorschau, 2 Seiten)",
-            description="Mehrseitiges Beispiel eines PDF-Dokuments mit Text, Tabelle und Seitenumbruch",
-            filename=pdf_fn,
-            path=pdf_path,
-            type="kursnachweis",
-            owner=student1.id,
-            author=admin.id,
-            is_template=False,
-            updated_date=datetime.now(timezone.utc),
-            is_done=True,
-        )
-
-        db.session.add_all(
-            [doc_journal, doc_gespraech, doc_vertrag, doc_word, doc_pdf]
-        )
+        db.session.add(doc)
         db.session.flush()
+        node = Knowledge(
+            parent_id=parent_id,
+            title=title,
+            description=description,
+            document_id=doc.id,
+        )
+        db.session.add(node)
+        db.session.flush()
+        return node
 
-        # 9. Knowledge Base (Wissen: Thema -> Seite)
-        def add_knowledge(title, description, content, parent_id=None, owner_user=admin):
-            filename, path = save_text_document(content, title, company.name)
-            doc = Documents(
-                name=title,
-                description=description,
-                filename=filename,
-                path=path,
-                type="wissen",
-                owner=owner_user.id,
-                author=owner_user.id,
-                is_template=False,
-                updated_date=datetime.now(timezone.utc),
-                is_done=True,
-            )
-            db.session.add(doc)
-            db.session.flush()
-            node = Knowledge(
-                parent_id=parent_id,
-                title=title,
-                description=description,
-                document_id=doc.id,
-            )
-            db.session.add(node)
-            db.session.flush()
-            return node
+    knowledge_owners = {
+        "Fertigung & Automatisierung": admin,
+        "Arbeitssicherheit & SUVA-Regeln": student1,
+        "Werkstoffkunde": student2,
+        "Technisches Zeichnen & Messtechnik": student1,
+    }
 
-        knowledge_owners = {
-            "Fertigung & Automatisierung": admin,
-            "Arbeitssicherheit & SUVA-Regeln": student1,
-            "Werkstoffkunde": student2,
-            "Technisches Zeichnen & Messtechnik": student1,
-        }
-
-        for topic in KNOWLEDGE_TOPICS:
-            owner_user = knowledge_owners.get(topic["title"], admin)
-            parent = add_knowledge(
-                topic["title"],
-                topic["description"],
-                topic["intro"],
+    for topic in KNOWLEDGE_TOPICS:
+        owner_user = knowledge_owners.get(topic["title"], admin)
+        parent = add_knowledge(
+            topic["title"],
+            topic["description"],
+            topic["intro"],
+            owner_user=owner_user,
+        )
+        for title, description, content in topic["pages"]:
+            add_knowledge(
+                title,
+                description,
+                content,
+                parent_id=parent.id,
                 owner_user=owner_user,
             )
-            for title, description, content in topic["pages"]:
-                add_knowledge(
-                    title,
-                    description,
-                    content,
-                    parent_id=parent.id,
-                    owner_user=owner_user,
-                )
 
-        db.session.commit()
-        print("Database seeded successfully.")
+    db.session.commit()
+    print("Database seeded successfully.")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 from datetime import date
+from sqlalchemy import func
 from flask import Blueprint, request, jsonify, g, session
-from backend.models import db, User, UserRelation, Project, Documents
+from backend import tenants
+from backend.models import db, User, UserRelation, UserRouting, Project, Documents
 from backend.auth import (
     login_required,
     role_required,
@@ -83,6 +85,33 @@ def parse_date(val):
         return None
 
 
+def sync_user_routing(user: User) -> None:
+    """Mirror the login routing row into the control database.
+
+    Called with the tenant user already flushed so its id/emails are known.
+    The routing row enables the global login e-mail search; all other user
+    data stays exclusively in the company database.
+    """
+    routing = UserRouting.query.filter_by(
+        id=user.id, company_id=user.company_id
+    ).first()
+    if routing is None:
+        routing = UserRouting(id=user.id, company_id=user.company_id)
+        db.session.add(routing)
+    routing.company_email = user.company_email
+    routing.private_email = user.private_email or ""
+    routing.school_email = user.school_email or ""
+
+
+def drop_user_routing(user: User) -> None:
+    """Remove the control-DB routing row of a deleted user."""
+    routing = UserRouting.query.filter_by(
+        id=user.id, company_id=user.company_id
+    ).first()
+    if routing is not None:
+        db.session.delete(routing)
+
+
 @bp.route("", methods=["GET"])
 @login_required
 def list_users():
@@ -134,7 +163,7 @@ def get_user(user_id):
 @role_required("ausbildner")
 def create_user():
     actor = get_current_user()
-    company = actor.company_rel
+    company = tenants.current_company()
 
     data = request.get_json(silent=True) or {}
     raw_role = parse_str(data.get("role"), "Rolle", default="lernender")
@@ -176,7 +205,14 @@ def create_user():
             }
         ), 400
 
-    if User.query.filter(User.company_email.ilike(company_email)).first():
+    # The routing index in the control DB spans all companies: a login e-mail
+    # must be unique across the whole platform, not only within this company.
+    if (
+        UserRouting.query.filter(
+            func.lower(UserRouting.company_email) == company_email
+        ).first()
+        or User.query.filter(User.company_email.ilike(company_email)).first()
+    ):
         return jsonify({"error": "Diese Firmen-E-Mail wird bereits verwendet."}), 400
 
     company_address = parse_str(data.get("company_address"), "Firmenadresse")
@@ -210,6 +246,8 @@ def create_user():
         picture_document=None,
     )
     db.session.add(new_user)
+    db.session.flush()  # assigns the tenant id shared by the routing row
+    sync_user_routing(new_user)
     db.session.commit()
     audit(
         "user_created",
@@ -336,20 +374,27 @@ def update_user(user_id):
             if role in {"lernender", "ausbildner"}:
                 target.role = role
         if "company_email" in data and incoming_company_email:
+            company = tenants.current_company()
             new_email = incoming_company_email.lower()
-            if not target.company_rel.matches_email(new_email):
+            if not company.matches_email(new_email):
                 return jsonify(
                     {
                         "error": (
                             "Die Firmen-E-Mail muss zur Domain "
-                            f"@{target.company_rel.email_domain} gehören."
+                            f"@{company.email_domain} gehören."
                         )
                     }
                 ), 400
-            existing = User.query.filter(
-                User.company_email.ilike(new_email), User.id != target.id
-            ).first()
-            if existing:
+            # E-mails are unique across the whole platform (routing index).
+            if (
+                UserRouting.query.filter(
+                    func.lower(UserRouting.company_email) == new_email,
+                    UserRouting.id != target.id,
+                ).first()
+                or User.query.filter(
+                    User.company_email.ilike(new_email), User.id != target.id
+                ).first()
+            ):
                 return jsonify({"error": "Firmen-E-Mail bereits vergeben."}), 400
             target.company_email = new_email
         if "start_date" in data:
@@ -380,6 +425,7 @@ def update_user(user_id):
         target.password_hash = hash_password(new_pw)
         bump_session_version(target)
 
+    sync_user_routing(target)
     db.session.commit()
     if new_pw and actor.id == target.id:
         # Keep the browser that changed its own password logged in; all other
@@ -425,6 +471,7 @@ def delete_user(user_id):
     ]
 
     deleted_role = target.role
+    drop_user_routing(target)  # first: makes the account unreachable
     db.session.delete(target)
     db.session.commit()
     for path in document_paths:

@@ -20,6 +20,7 @@ from backend.storage import (
     delete_stored_file,
 )
 from backend.audit import audit
+from backend import tenants
 from backend.validation import parse_bool, parse_int, parse_str
 
 bp = Blueprint("api_documents", __name__, url_prefix="/api/documents")
@@ -188,7 +189,7 @@ def create_document():
             name = uploaded_file.filename
         try:
             clean_filename, rel_path = save_uploaded_file(
-                uploaded_file, owner_user.company_rel.name
+                uploaded_file, tenants.current_company().name
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
@@ -196,7 +197,7 @@ def create_document():
         if not name:
             return jsonify({"error": "Dokumentname ist erforderlich."}), 400
         clean_filename, rel_path = save_text_document(
-            text_content, name, owner_user.company_rel.name
+            text_content, name, tenants.current_company().name
         )
     else:
         return jsonify(
@@ -362,7 +363,7 @@ def update_document(doc_id):
         _, rel_path = save_text_document(
             content,
             doc.name,
-            owner_user.company_rel.name,
+            tenants.current_company().name,
             existing_rel_path=doc.path,
         )
         doc.path = rel_path

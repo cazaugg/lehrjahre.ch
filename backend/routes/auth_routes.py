@@ -1,6 +1,8 @@
+import sqlalchemy
 from flask import Blueprint, request, jsonify, session, current_app
 from sqlalchemy import func, or_
-from backend.models import db, User, email_domain
+from backend import tenants
+from backend.models import db, Company, User, UserRouting, email_domain
 from backend.auth import (
     DUMMY_PASSWORD_HASH,
     verify_password,
@@ -61,27 +63,35 @@ def login():
     if company_hint:
         company_hint = company_hint.strip().lower().lstrip("@")
 
-    matches = User.query.filter(
+    # Route the login to company databases: the control DB's routing index
+    # holds only the e-mail -> user-id/company mapping (no credentials). Each
+    # candidate is verified against its own company's database file.
+    matches = []
+    for routing in UserRouting.query.filter(
         or_(
-            func.lower(User.company_email) == email,
-            func.lower(User.private_email) == email,
-            func.lower(User.school_email) == email,
+            func.lower(UserRouting.company_email) == email,
+            func.lower(UserRouting.private_email) == email,
+            func.lower(UserRouting.school_email) == email,
         )
-    ).all()
-    if company_hint:
-        from backend.models import Company
+    ).all():
+        company = db.session.get(Company, int(routing.company_id))
+        if company is None:
+            continue
+        if company_hint and (company.email_domain or "").lower() != company_hint:
+            continue
+        matches.append((routing, company))
 
-        matches = [
-            candidate
-            for candidate in matches
-            if candidate.company_rel
-            and (candidate.company_rel.email_domain or "").lower() == company_hint
-        ]
-    authenticated = [
-        candidate
-        for candidate in matches
-        if verify_password(candidate.password_hash, password)
-    ]
+    authenticated = []
+    for routing, company in matches:
+        try:
+            engine = tenants.tenant_engine(company)
+        except (RuntimeError, ValueError, OSError):
+            # Company database unusable/missing -> cannot authenticate here.
+            continue
+        with sqlalchemy.orm.Session(bind=engine) as side_session:
+            candidate = side_session.get(User, routing.id)
+            if candidate and verify_password(candidate.password_hash, password):
+                authenticated.append((routing, company))
 
     if len(authenticated) != 1:
         if not matches:
@@ -91,8 +101,18 @@ def login():
         audit("login_failure", email=email)
         return jsonify({"error": "Ungültige Anmeldedaten."}), 401
 
-    user = authenticated[0]
+    routing, company = authenticated[0]
     login_email_limiter.reset(email_key)
+
+    # From here the request runs inside the user's company database; the
+    # authoritative user record is loaded (and updated) there only.
+    tenants.set_tenant_company(company)
+    user = db.session.get(User, routing.id)
+    if not user:
+        login_ip_limiter.hit(ip_key)
+        login_email_limiter.hit(email_key)
+        audit("login_failure", email=email)
+        return jsonify({"error": "Ungültige Anmeldedaten."}), 401
 
     if password_needs_rehash(user.password_hash):
         user.password_hash = hash_password(password)
@@ -101,9 +121,10 @@ def login():
     session.clear()
     session.permanent = True
     session["user_id"] = user.id
+    session["company_id"] = company.id
     session["session_version"] = int(user.session_version or 0)
     csrf_token = ensure_csrf_token()
-    audit("login_success", user_id=user.id)
+    audit("login_success", user_id=user.id, company_id=company.id)
 
     return jsonify(
         {

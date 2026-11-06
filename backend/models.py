@@ -1,12 +1,81 @@
 import json
 import re
 from datetime import date, datetime, timezone
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
 import sqlite3
 
-db = SQLAlchemy()
+from sqlalchemy import event, inspect as sa_inspect
+from sqlalchemy import Table as sa_Table
+from sqlalchemy.sql import dml as sa_dml
+from sqlalchemy.engine import Engine
+from flask_sqlalchemy import SQLAlchemy
+from flask_sqlalchemy.session import Session as FlaskSQLAlchemySession
+
+
+def _profile_table_names(mapper, clause) -> set[str]:
+    """Best-effort extraction of table names from a mapper/statement."""
+    names: set[str] = set()
+    if mapper is not None:
+        try:
+            inspected = sa_inspect(mapper)
+        except BaseException:
+            inspected = mapper
+        table = getattr(inspected, "local_table", None)
+        if table is not None:
+            if isinstance(table, sa_Table):
+                names.add(table.name)
+            else:
+                names.add(getattr(table, "name", ""))
+    if clause is not None:
+        if isinstance(clause, sa_Table):
+            names.add(clause.name)
+        elif isinstance(clause, sa_dml.UpdateBase) and isinstance(
+            clause.table, sa_Table
+        ):
+            names.add(clause.table.name)
+        else:
+            stack = []
+            try:
+                stack.extend(clause.get_final_froms())
+            except Exception:
+                pass
+            seen: set[int] = set()
+            while stack and len(seen) < 100:
+                element = stack.pop()
+                if element is None or id(element) in seen:
+                    continue
+                seen.add(id(element))
+                if isinstance(element, sa_Table):
+                    names.add(element.name)
+                    continue
+                inner = getattr(element, "element", None)
+                if inner is not None:
+                    stack.append(inner)
+    return {name for name in names if name}
+
+
+class RoutingSession(FlaskSQLAlchemySession):
+    """Flask-SQLAlchemy session with company-level database routing.
+
+    Tenant tables (everything in a company database, including the full
+    ``user`` records) resolve to the active company's engine via
+    ``tenants.engine_for_tables``. Control tables (``company``,
+    ``user_routing``) and everything else resolve to the default engine, the
+    global control database.
+    """
+
+    def get_bind(self, mapper=None, clause=None, bind=None, **kwargs):
+        if bind is None:
+            tables = _profile_table_names(mapper, clause)
+            if tables:
+                from backend import tenants
+
+                tenant_engine = tenants.engine_for_tables(tables)
+                if tenant_engine is not None:
+                    return tenant_engine
+        return super().get_bind(mapper=mapper, clause=clause, bind=bind, **kwargs)
+
+
+db = SQLAlchemy(session_options={"class_": RoutingSession})
 
 _DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$"
@@ -60,14 +129,15 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 
 
 class Company(db.Model):
+    """Control-database row: the company registry used to route to the
+    company's own database file. Real company data lives in the tenant DB."""
+
     __tablename__ = "company"
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False, unique=True)
     email_domain = db.Column(db.String(150), nullable=False, unique=True)
     address = db.Column(db.String(255), default="")
-
-    users = db.relationship("User", back_populates="company_rel")
 
     @db.validates("name")
     def validate_name(self, key, value):
@@ -92,26 +162,49 @@ class Company(db.Model):
         }
 
 
+class UserRouting(db.Model):
+    """Control-database routing index.
+
+    Maps a login e-mail address to a user *inside* a company database. Holds
+    no profile data and no credentials: it exists so a login attempt can be
+    routed to the correct company database file. The authoritative user
+    record (including password hash and session state) lives in that
+    company's ``app.db`` only.
+    """
+
+    __tablename__ = "user_routing"
+
+    # Equal to the user's primary key inside the company database; the
+    # (company_id, id) pair is globally unique.
+    id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(
+        db.Integer,
+        db.ForeignKey("company.id", ondelete="RESTRICT"),
+        nullable=False,
+        primary_key=True,
+    )
+    company_email = db.Column(db.String(150), unique=True, nullable=False)
+    private_email = db.Column(db.String(150), default="", nullable=False)
+    school_email = db.Column(db.String(150), default="", nullable=False)
+
+
 class User(db.Model):
+    """Full user record. Rows of this table live in the company's own
+    database (one company per database); `company_id` mirrors the control-DB
+    company registry id. A user can never be assigned to another company."""
+
     __tablename__ = "user"
 
     id = db.Column(db.Integer, primary_key=True)
     role = db.Column(db.String(50), nullable=False)  # 'ausbildner' | 'lernender'
     name = db.Column(db.String(120), nullable=False)
     surname = db.Column(db.String(120), nullable=False)
-    company_id = db.Column(
-        db.Integer,
-        db.ForeignKey("company.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
+    # References the control-DB company registry (no cross-database FK).
+    company_id = db.Column(db.Integer, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     # Incremented to revoke all existing sessions for this user.
     session_version = db.Column(
         db.Integer, nullable=False, default=0, server_default="0"
-    )
-
-    company_rel = db.relationship(
-        "Company", back_populates="users", lazy="joined"
     )
 
     # Contacts: private, school, company
@@ -135,6 +228,12 @@ class User(db.Model):
     )
 
     def to_dict(self):
+        # All rows of this table belong to the active company database; the
+        # company registry row comes from the control DB via the tenant
+        # context set before any tenant query runs.
+        from backend import tenants
+
+        company = tenants.current_company_optional()
         return {
             "id": self.id,
             "role": self.role,
@@ -142,9 +241,9 @@ class User(db.Model):
             "surname": self.surname,
             "full_name": f"{self.name} {self.surname}".strip(),
             "company_id": self.company_id,
-            "company": self.company_rel.name if self.company_rel else "",
+            "company": company.name if company else "",
             "company_domain": (
-                self.company_rel.email_domain if self.company_rel else ""
+                company.email_domain if company else ""
             ),
             "private_address": self.private_address or "",
             "private_email": self.private_email or "",
@@ -549,112 +648,26 @@ def _table_columns(cursor, table: str) -> set[str]:
     return {row[1] for row in cursor.fetchall()}
 
 
-def _migrate_company_membership(cursor):
-    """Move legacy free-text user.company values into the company table."""
-    user_columns = _table_columns(cursor, "user")
-    if "company" not in user_columns:
-        return
-
-    if "company_id" not in user_columns:
-        cursor.execute(
-            "ALTER TABLE user ADD COLUMN company_id INTEGER REFERENCES company(id)"
-        )
-
-    cursor.execute(
-        "SELECT id, company, company_email, company_address FROM user ORDER BY id"
-    )
-    rows = cursor.fetchall()
-
-    grouped: dict[str, list[tuple[int, str, str]]] = {}
-    for user_id, company_name, company_email, company_address in rows:
-        name = (company_name or "").strip()
-        if not name:
-            raise RuntimeError(
-                "Migration failed: user "
-                f"{user_id} has no company name. Fix the legacy user.company value."
-            )
-        grouped.setdefault(name, []).append(
-            (user_id, company_email, company_address)
-        )
-
-    for company_name, entries in grouped.items():
-        domains = {
-            domain
-            for _, company_email, _ in entries
-            if (domain := email_domain(company_email))
-        }
-        if len(domains) != 1:
-            found = ", ".join(sorted(domains)) or "keine gültige Domain"
-            raise RuntimeError(
-                "Migration failed: company "
-                f"'{company_name}' has inconsistent email domains ({found}). "
-                "Fix the company_email values before starting the app."
-            )
-        domain = next(iter(domains))
-        address = next(
-            (
-                (company_address or "").strip()
-                for _, _, company_address in entries
-                if (company_address or "").strip()
-            ),
-            "",
-        )
-
-        cursor.execute(
-            "SELECT id, address FROM company WHERE name = ?", (company_name,)
-        )
-        existing = cursor.fetchone()
-        if existing:
-            company_id = existing[0]
-            if not (existing[1] or "").strip() and address:
-                cursor.execute(
-                    "UPDATE company SET address = ? WHERE id = ?",
-                    (address, company_id),
-                )
-        else:
-            cursor.execute(
-                "SELECT id FROM company WHERE email_domain = ?", (domain,)
-            )
-            if cursor.fetchone():
-                raise RuntimeError(
-                    "Migration failed: domain "
-                    f"'{domain}' is already assigned to another company."
-                )
-            cursor.execute(
-                "INSERT INTO company (name, email_domain, address) VALUES (?, ?, ?)",
-                (company_name, domain, address),
-            )
-            company_id = cursor.lastrowid
-
-        cursor.execute(
-            "UPDATE user SET company_id = ? WHERE company = ?",
-            (company_id, company_name),
-        )
-        if address:
-            cursor.execute(
-                "UPDATE user SET company_address = ? "
-                "WHERE company = ? "
-                "AND (company_address IS NULL OR TRIM(company_address) = '')",
-                (address, company_name),
-            )
-
-    cursor.execute("SELECT COUNT(*) FROM user WHERE company_id IS NULL")
-    if cursor.fetchone()[0]:
-        raise RuntimeError(
-            "Migration failed: not every user could be assigned to a company."
-        )
-
-    try:
-        cursor.execute("ALTER TABLE user DROP COLUMN company")
-    except sqlite3.OperationalError as exc:
-        raise RuntimeError(
-            "Migration failed: dropping the legacy user.company column requires "
-            "SQLite 3.35 or newer."
-        ) from exc
+def tenant_tables() -> list:
+    """Table objects that live in every company (tenant) database."""
+    return [
+        User.__table__,
+        UserRelation.__table__,
+        Project.__table__,
+        Participation.__table__,
+        Eval.__table__,
+        Grades.__table__,
+        Documents.__table__,
+        Knowledge.__table__,
+    ]
 
 
-def ensure_schema_columns():
-    """Ensure newly added columns exist on pre-existing SQLite databases."""
+def ensure_tenant_columns(engine: Engine) -> None:
+    """Ensure newly added columns exist on a pre-existing company database.
+
+    Runs per tenant engine (cheap PRAGMA checks); control tables live in the
+    global database and are created fresh with their current schema.
+    """
     migrations = [
         ("user", "session_version", "INTEGER NOT NULL DEFAULT 0"),
         ("project", "document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
@@ -678,7 +691,7 @@ def ensure_schema_columns():
     ]
     original_cols = {}
     added_cols = {}
-    conn = db.engine.raw_connection()
+    conn = engine.raw_connection()
     try:
         cursor = conn.cursor()
         for table, column, col_def in migrations:
@@ -703,7 +716,6 @@ def ensure_schema_columns():
         elif "is_released" in eval_added and "eval_released" not in eval_added:
             cursor.execute("UPDATE eval SET is_released = eval_released")
 
-        _migrate_company_membership(cursor)
         conn.commit()
         cursor.close()
     finally:

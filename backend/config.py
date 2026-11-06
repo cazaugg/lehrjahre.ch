@@ -3,8 +3,11 @@ from datetime import timedelta
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-DOCUMENTS_DIR = os.path.join(DATA_DIR, "documents")
-DB_PATH = os.path.join(DATA_DIR, "lehrjahre.db")
+# Global control database: company registry + user->company routing index.
+CONTROL_DB_PATH = os.path.join(DATA_DIR, "control.db")
+# Each company owns its own folder: <company root>/<company-slug>/ with a
+# dedicated app.db (tenant database) and a documents/ directory.
+_DEFAULT_COMPANY_ROOT = os.environ.get("LEHRJAHRE_COMPANY_ROOT", DATA_DIR)
 
 
 INSECURE_DEFAULT_SECRET = "dev-secret-key-change-in-production"
@@ -20,10 +23,10 @@ class Config:
     }
     SECRET_KEY = os.environ.get("SECRET_KEY")
     SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL", f"sqlite:///{DB_PATH}"
+        "DATABASE_URL", f"sqlite:///{CONTROL_DB_PATH}"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    DOCUMENTS_ROOT = os.environ.get("DOCUMENTS_ROOT", DOCUMENTS_DIR)
+    COMPANY_ROOT = os.environ.get("LEHRJAHRE_COMPANY_ROOT", _DEFAULT_COMPANY_ROOT)
     MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20 MB max upload size
 
     # Cookie & Session security

@@ -35,8 +35,9 @@ def slugify_company(company_name: str) -> str:
     return slug or "default-company"
 
 
-def get_documents_root() -> str:
-    root = os.path.realpath(current_app.config["DOCUMENTS_ROOT"])
+def get_company_root() -> str:
+    """Root folder that contains one subfolder per company."""
+    root = os.path.realpath(current_app.config["COMPANY_ROOT"])
     os.makedirs(root, mode=0o750, exist_ok=True)
     try:
         os.chmod(root, 0o750)
@@ -46,25 +47,34 @@ def get_documents_root() -> str:
 
 
 def get_company_dir(company_name: str) -> tuple[str, str]:
-    """Return (company_slug, absolute_company_dir_path) ensuring containment."""
-    root = get_documents_root()
+    """Return (company_slug, absolute_company_documents_dir).
+
+    Layout: <COMPANY_ROOT>/<company-slug>/ contains the company database
+    (app.db) and a documents/ directory; uploaded files go inside
+    documents/ and stored DB paths stay relative to COMPANY_ROOT.
+    """
+    root = get_company_root()
     slug = slugify_company(company_name)
     company_dir = os.path.realpath(os.path.join(root, slug))
     if not company_dir.startswith(root + os.sep):
         raise ValueError("Invalid company directory path")
-    os.makedirs(company_dir, mode=0o750, exist_ok=True)
-    try:
-        os.chmod(company_dir, 0o750)
-    except OSError:
-        pass
-    return slug, company_dir
+    documents_dir = os.path.realpath(os.path.join(company_dir, "documents"))
+    if not documents_dir.startswith(company_dir + os.sep):
+        raise ValueError("Invalid company directory path")
+    for path in (root, company_dir, documents_dir):
+        os.makedirs(path, mode=0o750, exist_ok=True)
+        try:
+            os.chmod(path, 0o750)
+        except OSError:
+            pass
+    return slug, documents_dir
 
 
 def resolve_safe_path(relative_path: str) -> str:
-    """Resolve a stored relative path against DOCUMENTS_ROOT and prevent traversal."""
+    """Resolve a stored relative path against COMPANY_ROOT and prevent traversal."""
     if not relative_path:
         raise ValueError("Empty document path")
-    root = get_documents_root()
+    root = get_company_root()
     cleaned = relative_path.lstrip("/\\")
     full_path = os.path.realpath(os.path.join(root, cleaned))
     if not full_path.startswith(root + os.sep):
@@ -73,7 +83,7 @@ def resolve_safe_path(relative_path: str) -> str:
 
 
 def save_uploaded_file(file_storage, company_name: str) -> tuple[str, str]:
-    """Save a Werkzeug FileStorage into /data/documents/<company-slug>/ and return (clean_filename, relative_path)."""
+    """Save a Werkzeug FileStorage into <company folder>/documents/ and return (clean_filename, relative_path)."""
     raw_name = file_storage.filename or "document.bin"
     clean_name = secure_filename(raw_name) or "document.bin"
     ext = os.path.splitext(clean_name)[1].lower()
@@ -91,14 +101,14 @@ def save_uploaded_file(file_storage, company_name: str) -> tuple[str, str]:
         os.chmod(abs_path, 0o640)
     except OSError:
         pass
-    rel_path = f"{slug}/{stored_name}"
+    rel_path = f"{slug}/documents/{stored_name}"
     return clean_name, rel_path
 
 
 def save_text_document(
     content: str, title: str, company_name: str, existing_rel_path: str | None = None
 ) -> tuple[str, str]:
-    """Save or overwrite a Markdown/text document inside /data/documents/<company-slug>/."""
+    """Save or overwrite a Markdown/text document inside <company folder>/documents/."""
     safe_base = secure_filename(title) or "eintrag"
     if not safe_base.lower().endswith((".md", ".txt")):
         clean_filename = f"{safe_base}.md"
@@ -128,7 +138,7 @@ def save_text_document(
         os.chmod(abs_path, 0o640)
     except OSError:
         pass
-    rel_path = f"{slug}/{stored_name}"
+    rel_path = f"{slug}/documents/{stored_name}"
     return clean_filename, rel_path
 
 

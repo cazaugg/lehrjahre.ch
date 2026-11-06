@@ -6,6 +6,7 @@ from backend.audit import audit
 from backend.policies import visible_knowledge_owner_ids
 from backend.storage import save_text_document, read_text_document, delete_stored_file
 from backend.validation import parse_int, parse_str
+from backend import tenants
 
 bp = Blueprint("api_knowledge", __name__, url_prefix="/api/knowledge")
 
@@ -82,7 +83,7 @@ def create_knowledge_node():
 
     # Every knowledge node stores its page content as a document in /data/documents/<company-slug>/
     clean_filename, rel_path = save_text_document(
-        content, title, actor.company_rel.name
+        content, title, tenants.current_company().name
     )
     doc = Documents(
         name=title,
@@ -157,12 +158,12 @@ def update_knowledge_node(node_id):
             save_text_document(
                 content,
                 node.title,
-                actor.company_rel.name,
+                tenants.current_company().name,
                 existing_rel_path=node.document.path,
             )
     elif content is not None:
         clean_filename, rel_path = save_text_document(
-            content, node.title, actor.company_rel.name
+            content, node.title, tenants.current_company().name
         )
         doc = Documents(
             name=node.title,
