@@ -60,7 +60,7 @@ def list_lehrplan_jobs():
 @bp.route("/lz/<string:lz_id>", methods=["GET"])
 @login_required
 def lookup_lernziel(lz_id):
-    """Resolve a Lernziel ID against the static lehrplan data (display helper)."""
+    """Resolve a Lernziel (or Lernkriterium) ID against the static lehrplan data."""
     jobs = _load_jobs()
     for code in jobs:
         tree = _load_lehrplan(code)
@@ -74,6 +74,7 @@ def lookup_lernziel(lz_id):
                             return jsonify(
                                 {
                                     "data": {
+                                        "kind": "lz",
                                         "code": code,
                                         "job_name": jobs[code].get("name"),
                                         "lz_id": lz_id,
@@ -84,6 +85,23 @@ def lookup_lernziel(lz_id):
                                     }
                                 }
                             )
+                    # Lernkriterien ohne eigene Lernziele (z.B. Lernort BE)
+                    # werden direkt per LK-ID aufgelöst.
+                    if str(lk.get("ID LK")) == lz_id:
+                        return jsonify(
+                            {
+                                "data": {
+                                    "kind": "lk",
+                                    "code": code,
+                                    "job_name": jobs[code].get("name"),
+                                    "lz_id": None,
+                                    "lk_id": lk.get("ID LK"),
+                                    "description": lk.get("Beschreibung LK"),
+                                    "lernort": lk.get("Lernort"),
+                                    "semesters": lk.get("Semester"),
+                                }
+                            }
+                        )
     return jsonify({"error": "Lernziel nicht gefunden."}), 404
 
 

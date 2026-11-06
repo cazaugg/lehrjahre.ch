@@ -245,7 +245,7 @@ function formatScore(evaluation) {
               :key="'eval-goal-' + idx"
               class="task-overview-item"
             >
-              <strong>🎯 <LernzielLabel :goal="goal" /></strong>
+              <strong><LernzielLabel icon :goal="goal" /></strong>
               <p
                 style="white-space: pre-line; margin: 6px 0 0 0"
                 :class="{ 'text-muted': !goalEvalFor(goal)?.eval_text }"

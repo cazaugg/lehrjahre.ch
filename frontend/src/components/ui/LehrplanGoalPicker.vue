@@ -454,10 +454,11 @@ function confirmSelection() {
       jobCode: code.value
     }))
   // LKs ohne Lernziele: das Lernkriterium selbst wird als Ziel gewählt.
+  // Das «LK:»-Präfix macht den Eintrag in der Projekt-Liste eindeutig auflösbar.
   const pickedLks = selectedLks.value.map((lk) => ({
-    id: String(lk['ID LK']),
+    id: 'LK:' + String(lk['ID LK']),
     description: lk['Beschreibung LK'],
-    lkId: String(lk['ID LK']),
+    lkId: lk['ID LK'],
     lernort: lk.Lernort,
     semesters: lk.Semester,
     jobCode: code.value
@@ -628,7 +629,10 @@ function formatSemesters(arr) {
                       type="checkbox"
                       :title="'Lernkriterium wählen (' + lkv.lk['ID LK'] + ')'"
                       :checked="isSelectedLk(lkv.lk)"
-                      :disabled="selectedExisting.has(String(lkv.lk['ID LK']))"
+                      :disabled="
+                        selectedExisting.has('LK:' + String(lkv.lk['ID LK'])) ||
+                        selectedExisting.has(String(lkv.lk['ID LK']))
+                      "
                       @click.stop
                       @change="toggleLk(lkv.lk)"
                     />

@@ -600,7 +600,7 @@ function formatDate(d) {
           <div class="detail-label">Zugewiesene Ziele</div>
           <ul class="clean-list">
             <li v-for="(g, idx) in project.goals" :key="idx" class="goal-line">
-              🎯 <LernzielLabel :goal="g" />
+              <LernzielLabel icon :goal="g" />
             </li>
           </ul>
         </div>
@@ -947,7 +947,7 @@ function formatDate(d) {
                 :key="'eval-goal-' + idx"
                 class="task-overview-item"
               >
-                <strong>🎯 <LernzielLabel :goal="g" /></strong>
+                <strong><LernzielLabel icon :goal="g" /></strong>
                 <p
                   style="white-space: pre-line; margin: 6px 0 0 0"
                   :class="{ 'text-muted': !goalEvalFor(g)?.eval_text }"
