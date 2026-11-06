@@ -63,6 +63,23 @@ def serialize_goals(goals_input) -> str:
     return "[]"
 
 
+# Dokumenttypen, die Lernziele tragen dürfen (Ziele-Pflege im Editor).
+GOAL_DOCUMENT_TYPES = {"lernjournal", "zeugnis", "kursnachweis"}
+
+
+def parse_form_goals(raw):
+    """Goals from a multipart form field (JSON array string or multiline text)."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+    except (ValueError, TypeError):
+        pass
+    return raw
+
+
 @bp.route("", methods=["GET"])
 @login_required
 def list_documents():
@@ -164,6 +181,7 @@ def create_document():
         is_done = form.get("is_done", "false").lower() == "true"
         text_content = parse_str(form.get("content"), "Inhalt", allow_none=True)
         feedback = parse_str(form.get("feedback"), "Rückmeldung")
+        goals_input = parse_form_goals(form.get("goals"))
     else:
         data = request.get_json(silent=True) or {}
         uploaded_file = None
@@ -179,7 +197,7 @@ def create_document():
         is_done = parse_bool(data.get("is_done"), "Abgeschlossen")
         text_content = parse_str(data.get("content"), "Inhalt", allow_none=True)
         feedback = parse_str(data.get("feedback"), "Rückmeldung")
-        goals_input = data.get("goals")
+        goals_input = parse_form_goals(data.get("goals"))
 
     if doc_type not in VALID_TYPES:
         doc_type = "sonstiges"
@@ -230,7 +248,9 @@ def create_document():
         is_template=is_template,
         updated_date=datetime.now(timezone.utc),
         is_done=is_done,
-        goals=serialize_goals(goals_input if doc_type == "lernjournal" else None),
+        goals=serialize_goals(
+            goals_input if doc_type in GOAL_DOCUMENT_TYPES else None
+        ),
         feedback=feedback if is_supervisor(actor) else "",
         feedback_author=(
             actor.id if is_supervisor(actor) and feedback else None
@@ -373,7 +393,7 @@ def update_document(doc_id):
         doc.description = parse_str(data.get("description"), "Beschreibung")
     if "is_done" in data:
         doc.is_done = parse_bool(data.get("is_done"), "Abgeschlossen")
-    if doc.type == "lernjournal" and "goals" in data:
+    if doc.type in GOAL_DOCUMENT_TYPES and "goals" in data:
         doc.goals = serialize_goals(data.get("goals"))
     if is_supervisor(actor) and "is_template" in data:
         doc.is_template = new_template

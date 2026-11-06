@@ -6,6 +6,9 @@ import { useAuthStore } from '../stores/auth'
 import ModalDialog from '../components/ui/ModalDialog.vue'
 import DocumentManager from '../components/ui/DocumentManager.vue'
 import EditButton from '../components/ui/EditButton.vue'
+import LehrplanGoalPicker from '../components/ui/LehrplanGoalPicker.vue'
+import LernzielLabel from '../components/ui/LernzielLabel.vue'
+import { jobCodeForProfession } from '../utils/lehrplanJobs'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -30,6 +33,35 @@ const formTitle = ref('')
 const formGrade = ref('5.0')
 const formDate = ref(new Date().toISOString().slice(0, 10))
 const formComment = ref('')
+const formGradeGoals = ref([])
+const newGoalText = ref('')
+const showGradeGoalPicker = ref(false)
+
+function applyPickedGradeGoals(picked) {
+  for (const item of picked || []) {
+    if (item?.id && !formGradeGoals.value.includes(item.id)) {
+      formGradeGoals.value.push(item.id)
+    }
+  }
+}
+
+function addGradeGoal() {
+  const g = (newGoalText.value || '').trim()
+  if (g && !formGradeGoals.value.includes(g)) formGradeGoals.value.push(g)
+  newGoalText.value = ''
+}
+
+function removeGradeGoal(idx) {
+  formGradeGoals.value.splice(idx, 1)
+}
+
+const defaultGradeJobCode = computed(() => {
+  const ownerUser =
+    auth.isStudent && auth.user?.id === Number(formStudentId.value)
+      ? auth.user
+      : auth.companyStudents.find((s) => s.id === Number(formStudentId.value))
+  return jobCodeForProfession(ownerUser?.job_title || '')
+})
 
 const commonSubjects = [
   'Technische Grundlagen (Mathematik & Physik)',
@@ -132,6 +164,8 @@ function openNewGrade() {
   formGrade.value = '5.0'
   formDate.value = new Date().toISOString().slice(0, 10)
   formComment.value = ''
+  formGradeGoals.value = []
+  newGoalText.value = ''
   showGradeModal.value = true
 }
 
@@ -143,6 +177,8 @@ function openEditGrade(g) {
   formGrade.value = String(g.grade)
   formDate.value = g.date || new Date().toISOString().slice(0, 10)
   formComment.value = g.comment || ''
+  formGradeGoals.value = [...(g.goals || [])]
+  newGoalText.value = ''
   showGradeModal.value = true
 }
 
@@ -155,7 +191,8 @@ async function saveGrade() {
       title: formTitle.value,
       grade: parseFloat(formGrade.value),
       date: formDate.value,
-      comment: formComment.value
+      comment: formComment.value,
+      goals: formGradeGoals.value
     }
     if (editingGrade.value) {
       await apiFetch(`/api/grades/${editingGrade.value.id}`, {
@@ -430,6 +467,42 @@ function formatDate(d) {
           <textarea v-model="formComment" class="form-control" rows="3" />
         </div>
 
+        <!-- Lernziele -->
+        <div class="form-group">
+          <label class="form-label">Lernziele</label>
+
+          <div class="goal-list-display">
+            <span
+              v-for="(g, idx) in formGradeGoals"
+              :key="g + idx"
+              class="goal-chip"
+            >
+              <LernzielLabel :goal="g" />
+              <button
+                type="button"
+                class="goal-chip-remove"
+                title="Lernziel entfernen"
+                @click="removeGradeGoal(idx)"
+              >✕</button>
+            </span>
+            <span v-if="formGradeGoals.length === 0" class="text-muted">Noch keine Lernziele erfasst.</span>
+          </div>
+
+          <div class="flex-gap" style="margin-top: var(--space-2)">
+            <input
+              v-model="newGoalText"
+              type="text"
+              class="form-control goal-add-input"
+              placeholder="Neues Lernziel eingeben..."
+              @keydown.enter.prevent="addGradeGoal"
+            />
+            <button type="button" class="btn btn-sm" @click="addGradeGoal">+ Hinzufügen</button>
+            <button type="button" class="btn btn-sm" @click="showGradeGoalPicker = true">
+              + Lernziel aus Lehrplan wählen
+            </button>
+          </div>
+        </div>
+
         <div class="flex-between">
           <button type="button" class="btn" @click="showGradeModal = false">
             Abbrechen
@@ -438,10 +511,56 @@ function formatDate(d) {
         </div>
       </form>
     </ModalDialog>
+
+    <!-- Lernziel-Picker (Noten & Prüfungen) -->
+    <LehrplanGoalPicker
+      :show="showGradeGoalPicker"
+      :default-job-code="defaultGradeJobCode"
+      :existing="formGradeGoals"
+      @confirm="applyPickedGradeGoals"
+      @close="showGradeGoalPicker = false"
+    />
   </div>
 </template>
 
 <style scoped>
+/* Lernziele-Pflege im Noten-Modal */
+.goal-list-display {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.goal-chip {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.6rem;
+  max-width: 100%;
+}
+
+.goal-chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--color-text-light);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 2px 0 0;
+}
+
+.goal-chip-remove:hover {
+  color: var(--color-danger, #a33);
+}
+
+.goal-add-input {
+  flex: 1;
+  min-width: 12rem;
+}
+
 .student-average-bar {
   display: flex;
   align-items: center;

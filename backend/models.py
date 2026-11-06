@@ -508,6 +508,7 @@ class Grades(db.Model):
     grade = db.Column(db.Float, nullable=False)
     title = db.Column(db.String(200), nullable=False)
     comment = db.Column(db.Text, default="")
+    goals = db.Column(db.Text, default="[]")  # JSON list of goal strings (like Project.goals)
 
     student_user = db.relationship("User", foreign_keys=[student], lazy="joined")
 
@@ -525,6 +526,7 @@ class Grades(db.Model):
             "grade": round(float(self.grade), 2),
             "title": self.title,
             "comment": self.comment or "",
+            "goals": self.parsed_goals(),
             "semester": (
                 semester_for_date(
                     self.date,
@@ -535,6 +537,15 @@ class Grades(db.Model):
                 else None
             ),
         }
+
+    def parsed_goals(self):
+        if not self.goals:
+            return []
+        try:
+            data = json.loads(self.goals)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
 
 
 class Documents(db.Model):
@@ -693,6 +704,7 @@ def ensure_tenant_columns(engine: Engine) -> None:
         ("eval", "score_type", "VARCHAR(50)"),
         ("eval", "score_value", "FLOAT"),
         ("documents", "goals", "TEXT DEFAULT '[]'"),
+        ("grades", "goals", "TEXT DEFAULT '[]'"),
         ("eval", "is_released", "BOOLEAN NOT NULL DEFAULT 0"),
         ("eval", "eval_released", "BOOLEAN NOT NULL DEFAULT 0"),
         ("documents", "feedback", "TEXT DEFAULT ''"),
