@@ -459,6 +459,7 @@ class Documents(db.Model):
     )
     is_done = db.Column(db.Boolean, default=False, nullable=False)
     feedback = db.Column(db.Text, default="")
+    goals = db.Column(db.Text, default="[]")  # JSON list of goal strings (like Project.goals)
     feedback_author = db.Column(
         db.Integer, db.ForeignKey("user.id", ondelete="SET NULL"), nullable=True
     )
@@ -493,6 +494,7 @@ class Documents(db.Model):
                 self.updated_date.isoformat() if self.updated_date else None
             ),
             "is_done": bool(self.is_done),
+            "goals": self.parsed_goals(),
             "feedback": self.feedback or "",
             "feedback_author": self.feedback_author,
             "feedback_author_name": (
@@ -500,7 +502,17 @@ class Documents(db.Model):
                 if self.feedback_author_user
                 else ""
             ),
+            "goals": self.parsed_goals(),
         }
+
+    def parsed_goals(self):
+        if not self.goals:
+            return []
+        try:
+            data = json.loads(self.goals)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
 
 
 class Knowledge(db.Model):
@@ -667,6 +679,7 @@ def ensure_schema_columns():
         ("eval", "target_type", "VARCHAR(50) NOT NULL DEFAULT 'goal'"),
         ("eval", "score_type", "VARCHAR(50)"),
         ("eval", "score_value", "FLOAT"),
+        ("documents", "goals", "TEXT DEFAULT '[]'"),
         ("eval", "is_released", "BOOLEAN NOT NULL DEFAULT 0"),
         ("eval", "eval_released", "BOOLEAN NOT NULL DEFAULT 0"),
         ("documents", "feedback", "TEXT DEFAULT ''"),
