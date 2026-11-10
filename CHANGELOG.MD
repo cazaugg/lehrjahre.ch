@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Deployment:** Added a Docker stack (`compose.yaml` + multi-stage `Dockerfile`): a pinned Traefik v3 edge proxy (Let's Encrypt, 80/443, Docker provider) routes `Host(domain)` to a single Gunicorn container (1 worker / 4 threads). The API container now also serves the built frontend (`frontend/dist`) with an SPA fallback to `index.html`; unknown `/api/*` paths keep returning a JSON 404. Persistent data lives under `/data/lehrjahre.ch/` (`app/control.db`, tenant databases, documents, Traefik ACME); the container runs as non-root user 10001 with a read-only root filesystem, and the static lehrplan JSON is baked into the image.
+
 - **Roles:** Added an `admin` role ("Administrator"). Admins manage people and relationships exclusively (create/delete users, edit any contacts/master data in the company, manage all supervisor assignments, and perform any role change — including `confirm_role_elevation`), and can view private contacts of everyone in the company. Supervisors (`ausbildner`) lose these capabilities but keep everything else (including visibility rules and self-editing). Demo seed data includes an admin user (Sandra Meier).
 - **Seed data:** Rebuilt the demo projects around the Konstrukteur/in EFZ Lehrplan: three Konstrukteur students (1st–3rd year, projects in `backend/seed.py` quote Lernziele from `data/lehrplan/lehrplan_KR.json` verbatim in their goals), replacing the previous mixed-job demo data.
 - **Multi-tenancy:** Every company now owns its own SQLite database (`data/<company-slug>/app.db`) containing all its data, including user credentials. A global control database (`data/control.db`) holds only the company registry and the login email → company routing index. Deleted: the old single `data/lehrjahre.db`.

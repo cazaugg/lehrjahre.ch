@@ -1,0 +1,42 @@
+# Build context hygiene: keep it small, never ship secrets to the daemon.
+
+# VCS / IDE / OS
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Python
+.venv
+venv
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+*.egg-info
+
+# Node
+node_modules
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# Runtime data: only data/lehrplan is part of the image (baked, static).
+data/*
+!data/lehrplan
+
+# Docs / assets not needed in the image
+docs
+ui-review
+lehrjahre_logo.jpg
+CHANGELOG.MD
+LICENSE
+README.MD
+AGENTS.MD
+
+# Local deployment config
+.env
+compose.yaml
+Dockerfile

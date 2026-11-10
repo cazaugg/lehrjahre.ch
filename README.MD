@@ -90,18 +90,30 @@ uv run pytest backend/test_api.py
 
 ### 5. Production Deployment
 
-Flask only serves the API under `/api`. The reverse proxy serves the built frontend and falls back to `index.html` for client-side routes:
+Flask serves both the API and the built frontend. The Docker stack (Traefik edge proxy, Gunicorn application container) routes `Host(domain)` to the API container; non-`/api` paths fall back to `index.html` for client-side routes (see `serve_frontend` in `backend/app.py`).
 
-```nginx
-location /api/ {
-    proxy_pass http://127.0.0.1:5000;
-}
+```bash
+# Persistent data lives on the host (control.db, tenant databases, documents):
+sudo install -d -m 0755 /data/lehrjahre.ch
+sudo install -d -o 10001 -g 10001 -m 0750 /data/lehrjahre.ch/app   # API user (10001) owns its data
+sudo install -d -o 0 -g 0 -m 0700 /data/lehrjahre.ch/traefik       # Let's Encrypt account data
 
-location / {
-    root /path/to/frontend/dist;
-    try_files $uri $uri/ /index.html;
-}
+# Configuration (DOMAIN, ACME_EMAIL, SECRET_KEY via openssl rand -hex 32):
+cp .env.example .env && chmod 600 .env
+$EDITOR .env
+
+docker compose up -d --build
+
+# Create the first company (runtime data under /data/lehrjahre.ch/app):
+docker compose exec api python -m backend.companies add "Firma AG" "firma.ch" --address "Musterstrasse 1, 8000 Zürich"
 ```
+
+Design choices:
+
+- **Two containers only (`traefik`, `api`)** — Traefik is the single edge proxy and routes everything to the Flask/Gunicorn container; `ProxyFix` therefore sees exactly one trusted hop and client IPs stay correct.
+- **Persistent data** is bind-mounted read-write only for the API and lives under `/data/lehrjahre.ch/` (`app/control.db`, `app/<company-slug>/app.db` + `documents/`, `traefik/acme.json`). The static lehrplan JSON is baked into the image instead.
+- **Least privilege** — the API container runs as user 10001 with a read-only root filesystem (`tmpfs` for temp uploads); only Traefik publishes 80/443.
+- **Client-side routes without an asset extension** resolve to `index.html`; unknown `/api/*` paths keep returning a JSON 404.
 
 **Production checklist**
 - Set `LEHRJAHRE_ENV=production` (the default) and a strong, random `SECRET_KEY` of at least 32 characters. The app refuses to start without a secret outside development.

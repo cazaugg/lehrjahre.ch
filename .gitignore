@@ -26,3 +26,6 @@ data/documents/
 *.swp
 data/
 ui-review/
+
+# Local deployment secrets
+.env

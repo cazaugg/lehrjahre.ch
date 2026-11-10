@@ -1,7 +1,8 @@
 import logging
 import os
 import secrets
-from flask import Flask, jsonify, request
+from flask import Flask, abort, jsonify, request, send_from_directory
+from werkzeug.exceptions import NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
 from backend.config import Config, DATA_DIR, INSECURE_DEFAULT_SECRET
 from backend.models import db
@@ -121,13 +122,43 @@ def create_app(config_overrides: dict | None = None) -> Flask:
         app.logger.exception("Unhandled API error")
         return jsonify({"error": "Interner Serverfehler."}), 500
 
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_frontend(path):
+        """Serve the built frontend (Vite `dist`) with an SPA fallback to
+        `index.html` for client-side routes. API paths never fall back."""
+        if path == "api" or path.startswith("api/"):
+            abort(404)
+
+        dist = app.config["FRONTEND_DIST"]
+        if not os.path.isfile(os.path.join(dist, "index.html")):
+            return jsonify({"error": "Frontend nicht gebaut."}), 404
+
+        try:
+            response = send_from_directory(dist, path)
+        except NotFound:
+            # A missing file with a real extension (asset) is a genuine 404,
+            # everything else is a client-side route -> index.html.
+            if os.path.splitext(path)[1]:
+                abort(404)
+            response = send_from_directory(dist, "index.html")
+            response.headers["Cache-Control"] = "no-cache"
+            return response
+
+        if path.startswith("assets/"):
+            # Vite emits content-hashed filenames -> cache forever.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.route("/api/health")
     def api_health():
         return jsonify({"service": "lehrjahre.ch API", "status": "ok"})
 
     @app.errorhandler(404)
     def not_found(error):
-        if request.path.startswith("/api/"):
+        if request.path == "/api" or request.path.startswith("/api/"):
             return jsonify({"error": "Endpunkt nicht gefunden."}), 404
         return jsonify({"error": "Nicht gefunden."}), 404
 

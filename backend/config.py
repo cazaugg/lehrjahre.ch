@@ -27,6 +27,11 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     COMPANY_ROOT = os.environ.get("LEHRJAHRE_COMPANY_ROOT", _DEFAULT_COMPANY_ROOT)
+    # Built frontend (Vite output) served by Flask behind the reverse proxy.
+    FRONTEND_DIST = os.environ.get(
+        "LEHRJAHRE_FRONTEND_DIST",
+        os.path.join(BASE_DIR, "frontend", "dist"),
+    )
     MAX_CONTENT_LENGTH = 20 * 1024 * 1024  # 20 MB max upload size
 
     # Cookie & Session security

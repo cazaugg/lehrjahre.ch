@@ -3407,3 +3407,55 @@ def test_lehrplan_requires_login_and_delivers_static_data(client):
     assert lz["code"] in {"AA", "KR", "MP", "PR", "PM", "AM", "AU", "ET"}
     assert lz["lk_id"]
     assert client.get("/api/lehrplan/lz/LZ_nothing").status_code == 404
+
+
+def test_spa_static_serving(client, tmp_path):
+    """The built frontend is served with an SPA fallback; the API keeps its
+    JSON 404 behavior."""
+    dist = tmp_path / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text("<html><body>lehrjahre</body></html>")
+    (assets / "app-abc123.js").write_text("console.log('hi')")
+
+    app = client.application
+    app.config["FRONTEND_DIST"] = str(dist)
+
+    # Client-side route falls back to index.html with no-cache.
+    res = client.get("/dashboard")
+    assert res.status_code == 200
+    assert res.get_data(as_text=True).startswith("<html")
+    assert res.headers["Cache-Control"] == "no-cache"
+
+    # Empty path (/) also falls back to index.html.
+    res = client.get("/")
+    assert res.status_code == 200
+
+    # Hashed build assets are cached forever.
+    res = client.get("/assets/app-abc123.js")
+    assert res.status_code == 200
+    assert res.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+
+    # A missing real asset is a genuine 404.
+    assert client.get("/assets/missing.js").status_code == 404
+
+    # Unknown API paths still return the JSON API 404.
+    res = client.get("/api/nonexistent")
+    assert res.status_code == 404
+    assert res.get_json() == {"error": "Endpunkt nicht gefunden."}
+    res = client.get("/api")
+    assert res.status_code == 404
+
+    # Path traversal cannot escape the dist folder: send_from_directory
+    # rejects it and the SPA fallback serves index.html from dist only.
+    res = client.get("/..%2f..%2fetc%2fpasswd")
+    assert res.status_code == 200
+    assert "lehrjahre" in res.get_data(as_text=True)
+
+
+def test_spa_missing_dist_returns_404(client):
+    """Without a built frontend the SPA route reports a clear error."""
+    client.application.config["FRONTEND_DIST"] = "/does/not/exist"
+
+    assert client.get("/dashboard").status_code == 404
+    assert client.get("/").status_code == 404
