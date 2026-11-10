@@ -1,6 +1,8 @@
 import io
 import json
 import os
+import shutil
+import sys
 import uuid
 import zipfile
 from datetime import date, datetime, timezone
@@ -606,7 +608,7 @@ def save_binary_document(data: bytes, filename: str, company_name: str) -> tuple
         raise ValueError("Invalid destination path")
     with open(abs_path, "wb") as handle:
         handle.write(data)
-    return filename, f"{slug}/{stored_name}"
+    return filename, f"{slug}/documents/{stored_name}"
 
 
 def build_word_preview_docx() -> bytes:
@@ -816,7 +818,26 @@ COMPANY_DOMAIN = "vektorwerk.ch"
 COMPANY_ADDRESS = "Industriestrasse 40, 8404 Winterthur"
 
 
-def seed_database():
+def reset_demo_company(company) -> None:
+    """Delete a demo company's tenant folder and control-DB registry rows.
+
+    Only meaningful in development (the only place demo seed data lives).
+    """
+    base_dir = tenants.company_base_dir(company)
+    # Drop cached SQLite engines first so no open handle blocks deletion.
+    tenants.reset_engine_cache()
+    if os.path.isdir(base_dir):
+        print(f"Deleting company folder {base_dir}")
+        shutil.rmtree(base_dir)
+    # Control-DB rows: login routing first, then the company registry.
+    deleted_routing = UserRouting.query.filter_by(company_id=company.id).delete()
+    print(f"Deleted {deleted_routing} user routing entries.")
+    db.session.delete(company)
+    db.session.commit()
+    print(f"Removed registry entry for {company.name} (@{company.email_domain}).")
+
+
+def seed_database(force: bool = False):
     app = create_app()
     if not app.config.get("IS_DEV"):
         raise RuntimeError(
@@ -824,6 +845,12 @@ def seed_database():
         )
     with app.app_context():
         company = Company.query.filter_by(name=COMPANY_NAME).first()
+        if force:
+            if company is None:
+                print(f"No demo company '{COMPANY_NAME}' found; nothing to reset.")
+            else:
+                reset_demo_company(company)
+                company = None
         if not company:
             company = add_company(COMPANY_NAME, COMPANY_DOMAIN, COMPANY_ADDRESS)
         # Provision (idempotent) the company folder: app.db + documents/.
@@ -832,7 +859,10 @@ def seed_database():
         # the company database only.
         with tenants.tenant_context(company):
             if User.query.first():
-                print("Database already contains users. Skipping seed.")
+                print(
+                    "Database already contains users. Skipping seed "
+                    "(reseed with 'npm run seed -- --force')."
+                )
                 return
             _seed_company_data(company)
 
@@ -991,21 +1021,33 @@ def _seed_company_data(company):
     )
 
     # 4. Projects aligned with the Konstrukteur/in EFZ Lehrplan
-    # (data/lehrplan/lehrplan_KR.json). Goal strings quote the Lernziele
-    # (LZ) verbatim and reference their Lehrplan IDs (HKB / HK / LK).
+    # (data/lehrplan/lehrplan_KR.json). Goals are plain Lernziel IDs
+    # (LZ_xxxx) as produced by the Lernziel-Picker, so the frontend can
+    # resolve them via /api/lehrplan/lz/<id> against the official plan.
     #
-    # Einfach: laufendes Projekt für Lea (1. Lehrjahr) – HK 3333 c.01
+    # Einfach (MIT Teilaufgaben): laufendes Projekt für Lea (1. Lehrjahr) –
+    # HK 3333 c.01. This is the only demo project with subtasks; all other
+    # projects carry their full working steps inside the description.
     p_skizzen = Project(
         parent_project=None,
         title="Normteile skizzieren und Zeichnungen lesen",
-        description="Einstiegsprojekt aus HK 3333 c.01 (Produkte skizzieren): Werkstattzeichnungen interpretieren, Normteile in Ansichten skizzieren und bemassen – inklusive Arbeitssicherheit (LK MEM 11 09).",
+        description=(
+            "Einstiegsprojekt aus HK 3333 c.01 (Produkte skizzieren). "
+            "Ausgangslage: Auf dem Werkbankauftrag liegt die Werkstattzeichnung einer "
+            "Grundplatte aus S235JR samt passenden Normteilen.\n\n"
+            "**Arbeitsschritte im Überblick:**\n"
+            "1. Werkstattzeichnung interpretieren: Ansichten, Schnitte, Werkstoff- und "
+            "Oberflächenangaben herauslesen.\n"
+            "2. Haupt- und Nebenansichten der Grundplatte als freihändige Skizze in korrekter "
+            "Projektionsrichtung anordnen.\n"
+            "3. Hauptabmassungen eintragen, Passungen und Form- und Lagetoleranzen gemäss "
+            "Vorgabe ergänzen.\n\n"
+            "**Abgabe:** Die Skizzen werden nach jeder Aufgabe besprochen und signiert; die "
+            "Arbeitssicherheit (LK MEM 11 09) gilt über das ganze Projekt."
+        ),
         author=fach_user.id,
         goals=json.dumps(
-            [
-                "(LZ_7944 / MEM 11 09) Sie treffen Schutzmassnahmen zur Arbeitssicherheit und zum Gesundheitsschutz.",
-                "(LZ_9003 / MEM 02 12) Sie interpretieren vorgegebene Arbeitsaufträge und Vorgaben.",
-                "(LZ_9157 / MEM 02 13) Sie erkennen das Vorgehen und die Abfolge von Arbeitsschritten bei Aufträgen.",
-            ],
+            ["LZ_7944", "LZ_9011", "LZ_9013"],
             ensure_ascii=False,
         ),
         assigned_students=json.dumps([student1.id]),
@@ -1018,18 +1060,36 @@ def _seed_company_data(company):
     db.session.add(p_skizzen)
     db.session.flush()
 
-    # Mittel: laufendes Projekt für Sven (2. Lehrjahr) – HK 3333 c.02 + c.03
+    # Mittel (ohne Teilaufgaben): laufendes Projekt für Sven (2. Lehrjahr) –
+    # HK 3333 c.02 + c.03; der komplette Arbeitsauftrag steckt in der Beschreibung.
     p_cad = Project(
         parent_project=None,
         title="Haltebolzen mit CAD modellieren und Fertigungsunterlagen erstellen",
-        description="Mittleres Projekt aus den HK 3333 c.02 (CAD-Modellieren) und 3333 c.03 (Fertigungsunterlagen): Parametrisiertes 3D-Modell erzeugen, Passungen ergänzen und Stückliste mit Teiledaten erstellen.",
+        description=(
+            "Mittleres Projekt aus den HK 3333 c.02 (CAD-Modellieren) und 3333 c.03 "
+            "(Fertigungsunterlagen) – ein durchgehender Auftrag, der ohne vordefinierte "
+            "Teilaufgaben eigenständig geplant und abgewickelt wird.\n\n"
+            "**Ausgangslage:** Ein Haltebolzen der LED-Beleuchtungseinheit ist als "
+            "Ersatzteil nachzuzeichnen. Der Instandhaltungsauftrag verlangt das Modell aus der "
+            "parametrisierten CAD-Bibliothek, damit spätere Längen- und Gewindevarianten "
+            "ohne neues Modellierarbeiten möglich sind.\n\n"
+            "**Vorgehen und Ausführung:**\n"
+            "1. *Parametrisiertes 3D-Modell:* Haltebolzen als Volumenmodell aufbauen, "
+            "Teil-Länge und Gewinde über eine parametrisierte Tabelle steuern und die "
+            "Auswirkung von Werteänderungen auf die Varianten prüfen. **(erledigt)**\n"
+            "2. *Passungen und Toleranzen:* Lagersitz und Dichtfläche mit Passung H7/g6 "
+            "versehen, Form- und Lagetoleranzen am Modell ergänzen und die Bemassung "
+            "fertigungs- und prüfgerecht anordnen. **(erledigt)**\n"
+            "3. *Stückliste und Teiledaten:* Teiledaten ermitteln und klassifizieren, dann "
+            "die Stückliste mit Positionsnummern, Menge, Einheit, Artikelnummer und "
+            "Merkmalen erstellen. **(aktuell offen)**\n\n"
+            "**Abgabe:** CAD-Modell samt parametrisierter Tabelle, prüfgerechte Bemassung "
+            "und fertigungsfertige Stückliste als eine Unterlagenserie. Ein "
+            "Zwischenrückgespräch zu den Passungen hat bereits stattgefunden."
+        ),
         author=fach_user.id,
         goals=json.dumps(
-            [
-                "(LZ_9626 / KR c2 11) Sie erzeugen mit parametrisierten Tabellen Modelle.",
-                "(LZ_9627 / KR c2 11) Sie prüfen die Auswirkungen auf die Modelle beim punktuellen Ändern von Werten in den parametrisierten Tabellen.",
-                "(LZ_9544 / KR c3 09) Sie orden Positionsnummern, Menge, Einheit, Artikelnummer, Benennung und Merkmale zu.",
-            ],
+            ["LZ_9626", "LZ_9627", "LZ_9544"],
             ensure_ascii=False,
         ),
         assigned_students=json.dumps([student2.id]),
@@ -1042,20 +1102,37 @@ def _seed_company_data(company):
     db.session.add(p_cad)
     db.session.flush()
 
-    # Anspruchsvoll: abgeschlossenes Projekt für Livia (3. Lehrjahr) –
-    # HK 3333 b.01 + b.02 + d.04 (Planungsinstrumente)
+    # Anspruchsvoll (ohne Teilaufgaben): abgeschlossenes Projekt für Livia
+    # (3. Lehrjahr) – HK 3333 b.01 + b.02 + d.04 (Planungsinstrumente);
+    # die drei Phasen sind vollständig in der Beschreibung dokumentiert.
     p_haube = Project(
         parent_project=None,
         title="Getriebehaube fertigungs- und werkstoffgerecht konstruieren",
-        description="Anspruchsvolles Projekt aus den HK 3333 b.01 (fertigungsgerechte Konstruktionen) und 3333 b.02 (spezifische Funktionen): Getriebehaube ausarbeiten, Kostenarten bewerten, Beschichtungsverfahren vergleichen und die Planung mit Instrumenten kontrollieren.",
+        description=(
+            "Anspruchsvolles Projekt aus den HK 3333 b.01 (fertigungsgerechte "
+            "Konstruktionen) und 3333 b.02 (spezifische Funktionen) – drei Phasen, "
+            "eigenständig geplant, umgesetzt und abgeschlossen.\n\n"
+            "**Ausgangslage:** Für das Getriebeprüfaggregat im Lehratelier fehlt ein "
+            "Deckelbauteil; es ist eine fertigungsgerechte Getriebehaube zu entwerfen, "
+            "die eine Dichtfläche, Lagersitze und einen einfachen Montagezugang enthält.\n\n"
+            "**Phase 1 – Anforderungen und Grobentwurf:** Anforderungsliste zur Haube "
+            "erfasst, funktionelle Einflussgrössen (Schmierung, Abdichtung, "
+            "Wärmeabfuhr, Montagezugang) beurteilt und einen fachgerechten Grobentwurf "
+            "mit erster Kostenabschätzung erstellt. **(erledigt)**\n\n"
+            "**Phase 2 – CAD-Feinentwurf:** Feinentwurf mit CAD ausgearbeitet, die "
+            "gebräuchlichsten Maschinenelemente (Deckel, Lager, Dichtungen, "
+            "Befestigung) funktional ausgelegt und die Lagerdichtung vorgezeichnet. "
+            "**(erledigt)**\n\n"
+            "**Phase 3 – Unterlagen und Bewertung:** Kostenarten der Fertigung bewertet, "
+            "Beschichtungsverfahren (Lackierung, Galvanisierung, Eloxal) verglichen und "
+            "die finalen Fertigungsunterlagen samt Kontrollliste erstellt. "
+            "**(erledigt)**\n\n"
+            "**Projektsteuerung:** Der ganze Ablauf wurde mit einem Meilensteinplan und "
+            "einer Kontrollliste als Planungsinstrumente begleitet."
+        ),
         author=admin.id,
         goals=json.dumps(
-            [
-                "(LZ_9332 / KR b2 04) Sie beurteilen die gebräuchlichsten Maschinenelemente.",
-                "(LZ_9333 / KR b2 04) Sie beschreiben die Funktion und den Einsatz der gebräuchlichsten Maschinenelemente.",
-                "(LZ_11278 / KR b1 08) Sie beurteilen die Bedeutung von Oberflächenbehandlungen und deren Einfluss auf die Qualität und Eigenschaft der Beschichtung.",
-                "(LZ_9302 / xx d10 01) Sie setzen geeignete Planungsinstrumente ein.",
-            ],
+            ["LZ_9332", "LZ_9333", "LZ_11278", "LZ_9302"],
             ensure_ascii=False,
         ),
         assigned_students=json.dumps([student3.id]),
@@ -1069,17 +1146,31 @@ def _seed_company_data(company):
     db.session.add(p_haube)
     db.session.flush()
 
-    # Entwurf: noch nicht freigegebenes Projekt für alle drei – HK 3333 a.01 + a.03
+    # Entwurf (ohne Teilaufgaben): noch nicht freigegebenes Projekt für alle
+    # drei – HK 3333 a.01 + a.03; die Arbeitsphasen stehen in der Beschreibung.
     p_halter = Project(
         parent_project=None,
         title="Messgerätehalter: von der Anforderungsliste zum Grobentwurf",
-        description="Gemeinsames Projekt aus den HK 3333 a.01 (Entwicklungen planen) und 3333 a.03 (Grobentwürfe): Arbeitsauftrag interpretieren, funktionelle Einflussgrössen beurteilen und Grobentwurfsvarianten mit Kostenabschätzung erstellen.",
+        description=(
+            "Gemeinsames Projekt der drei Konstrukteur/innen aus den HK 3333 a.01 "
+            "(Entwicklungen planen) und 3333 a.03 (Grobentwürfe) – noch nicht "
+            "veröffentlicht, deshalb erscheint es vorerst ohne Teilaufgaben.\n\n"
+            "**Ausgangslage:** Im Messraum der Vektorwerk Werkstatt liegen Messschieber "
+            "und Bügelmessschrauben lose auf der Ablage. Ein Halter für zwei Baugrössen "
+            "am Werkzeugkarussellwagen soll Ablage- und Wechselzeit reduzieren.\n\n"
+            "**Arbeitsschritte im Überblick:**\n"
+            "1. Arbeitsauftrag interpretieren, Umgebung und Benutzersituation erfassen "
+            "und daraus eine Anforderungsliste (funktional und quantitativ) ableiten.\n"
+            "2. Zwei Grobentwurfsvarianten erarbeiten, die funktionellen Einflussgrössen "
+            "beurteilen und je Variante die Herstellkosten abschätzen.\n"
+            "3. Die Varianten mit einer Vergleichsmatrix gegenüberstellen und die "
+            "Entscheidung dokumentiert begründen.\n\n"
+            "**Termin:** Bearbeitung im Januar/Februar 2027 nach Rückkehr vom üK; die "
+            "Freigabe der Planung erfolgt in der ersten Konstruktionsbesprechung."
+        ),
         author=admin.id,
         goals=json.dumps(
-            [
-                "(LZ_9003 / MEM 02 12) Sie interpretieren vorgegebene Arbeitsaufträge und Vorgaben.",
-                "(LZ_9345 / KR a3 09) Sie beurteilen bei der Entscheidungsfindung die funktionellen Einflussgrössen.",
-            ],
+            ["LZ_9003", "LZ_9345"],
             ensure_ascii=False,
         ),
         assigned_students=json.dumps([student1.id, student2.id, student3.id]),
@@ -1097,7 +1188,7 @@ def _seed_company_data(company):
         title="Aufgabe 1: Zeichnung interpretieren und Ansichten skizzieren",
         description="Werkstattzeichnung einer Grundplatte lesen und Haupt- und Nebenansichten als Skizze anordnen.",
         author=fach_user.id,
-        goals=json.dumps(["Ansichten projektionsgerecht anordnen"], ensure_ascii=False),
+        goals=json.dumps(["LZ_9471", "LZ_717"], ensure_ascii=False),
         assigned_students=json.dumps([student1.id]),
         start_date=date(2026, 10, 26),
         due_date=date(2026, 11, 6),
@@ -1110,7 +1201,7 @@ def _seed_company_data(company):
         title="Aufgabe 2: Skizzen bemassen und Toleranzen ergänzen",
         description="Skizzen bemassen, Passungen und Form- und Lagetoleranzen gemäss Vorgabe ergänzen.",
         author=fach_user.id,
-        goals=json.dumps(["Bemassung vollständig und normgerecht"], ensure_ascii=False),
+        goals=json.dumps(["LZ_9019", "LZ_9000"], ensure_ascii=False),
         assigned_students=json.dumps([student1.id]),
         start_date=date(2026, 11, 9),
         due_date=date(2026, 12, 11),
@@ -1119,130 +1210,12 @@ def _seed_company_data(company):
         is_completed=False,
     )
 
-    task_cad_modell = Project(
-        parent_project=p_cad.id,
-        title="Aufgabe 1: Parametrisiertes CAD-Modell erzeugen",
-        description="Haltebolzen als 3D-Modell mit parametrisierter Tabelle erzeugen und die Auswirkung von Anderungen auf das Modell prüfen.",
-        author=fach_user.id,
-        goals=json.dumps(["Parameter aus Tabellen korrekt verknüpfen"], ensure_ascii=False),
-        assigned_students=json.dumps([student2.id]),
-        start_date=date(2026, 9, 7),
-        due_date=date(2026, 9, 25),
-        is_published=True,
-        planning_released=True,
-        is_completed=True,
-    )
-    task_cad_passungen = Project(
-        parent_project=p_cad.id,
-        title="Aufgabe 2: Passungen und Form- und Lagetoleranzen ergänzen",
-        description="Fertigungsgerechte Passungen, Form- und Lagetoleranzen am Modell ergänzen und mit Bemassung prüfen.",
-        author=fach_user.id,
-        goals=json.dumps(["Passungen und FL-Toleranzen normgerecht"], ensure_ascii=False),
-        assigned_students=json.dumps([student2.id]),
-        start_date=date(2026, 9, 28),
-        due_date=date(2026, 10, 23),
-        is_published=True,
-        planning_released=True,
-        is_completed=True,
-    )
-    task_cad_stueckliste = Project(
-        parent_project=p_cad.id,
-        title="Aufgabe 3: Stückliste und Teiledaten erfassen",
-        description="Teiledaten ermitteln und klassifizieren, Stückliste mit Positionsnummern und Merkmalen erstellen.",
-        author=fach_user.id,
-        goals=json.dumps(["Teiledaten vollständig in Stückliste erfassen"], ensure_ascii=False),
-        assigned_students=json.dumps([student2.id]),
-        start_date=date(2026, 10, 26),
-        due_date=date(2026, 11, 27),
-        is_published=True,
-        planning_released=True,
-        is_completed=False,
-    )
-
-    task_haube_grobentwurf = Project(
-        parent_project=p_haube.id,
-        title="Aufgabe 1: Anforderungsliste und Grobentwurf",
-        description="Anforderungen an die Getriebehaube erfassen, funktionelle Einflussgrössen beurteilen und einen fachgerechten Grobentwurf erstellen.",
-        author=admin.id,
-        goals=json.dumps(["Anforderungsliste und Grobentwurf konsistent"], ensure_ascii=False),
-        assigned_students=json.dumps([student3.id]),
-        start_date=date(2026, 5, 4),
-        due_date=date(2026, 5, 22),
-        is_published=True,
-        planning_released=True,
-        is_completed=True,
-    )
-    task_haube_feinentwurf = Project(
-        parent_project=p_haube.id,
-        title="Aufgabe 2: CAD-Feinentwurf und Maschinenelemente einbauen",
-        description="Feinentwurf mit CAD erstellen, gebräuchlichste Maschinenelemente (Deckel, Lager, Dichtungen, Befestigung) auslegen und prüfen.",
-        author=admin.id,
-        goals=json.dumps(["Maschinenelemente funktional korrekt auslegen"], ensure_ascii=False),
-        assigned_students=json.dumps([student3.id]),
-        start_date=date(2026, 5, 25),
-        due_date=date(2026, 6, 12),
-        is_published=True,
-        planning_released=True,
-        is_completed=True,
-    )
-    task_haube_unterlagen = Project(
-        parent_project=p_haube.id,
-        title="Aufgabe 3: Fertigungsunterlagen, Kosten und Beschichtung",
-        description="Kostenarten der Fertigung bewerten, Beschichtungsverfahren vergleichen und die finalen Fertigungsunterlagen erstellen.",
-        author=admin.id,
-        goals=json.dumps(["Kosten und Beschichtung begründet dokumentieren"], ensure_ascii=False),
-        assigned_students=json.dumps([student3.id]),
-        start_date=date(2026, 6, 15),
-        due_date=date(2026, 6, 26),
-        is_published=True,
-        planning_released=True,
-        is_completed=True,
-    )
-
-    task_halter_anforderungen = Project(
-        parent_project=p_halter.id,
-        title="Aufgabe 1: Anforderungsliste erstellen",
-        description="Arbeitsauftrag interpretieren, Umgebung erfassen und eine Anforderungsliste für den Messgerätehalter erstellen.",
-        author=admin.id,
-        goals=json.dumps(["Anforderungen eindeutig formulieren"], ensure_ascii=False),
-        assigned_students=json.dumps([student1.id, student2.id, student3.id]),
-        start_date=date(2027, 1, 11),
-        due_date=date(2027, 1, 29),
-        is_published=False,
-        planning_released=False,
-        is_completed=False,
-    )
-    task_halter_grobentwurf = Project(
-        parent_project=p_halter.id,
-        title="Aufgabe 2: Grobentwurfsvarianten erstellen und Kosten abschätzen",
-        description="Zwei Grobentwurfsvarianten erarbeiten, funktionelle Einflussgrössen beurteilen und die Herstellkosten abschätzen.",
-        author=admin.id,
-        goals=json.dumps(["Varianten beurteilbar dokumentieren"], ensure_ascii=False),
-        assigned_students=json.dumps([student1.id, student2.id, student3.id]),
-        start_date=date(2027, 2, 1),
-        due_date=date(2027, 2, 26),
-        is_published=False,
-        planning_released=False,
-        is_completed=False,
-    )
-
-    db.session.add_all(
-        [
-            task_skizzen_ansichten,
-            task_skizzen_bemassen,
-            task_cad_modell,
-            task_cad_passungen,
-            task_cad_stueckliste,
-            task_haube_grobentwurf,
-            task_haube_feinentwurf,
-            task_haube_unterlagen,
-            task_halter_anforderungen,
-            task_halter_grobentwurf,
-        ]
-    )
+    db.session.add_all([task_skizzen_ansichten, task_skizzen_bemassen])
     db.session.flush()
 
-    # 5. Participations (/api/implementation)
+    # 5. Participations (/api/implementation). p_skizzen's entries stay on its
+    # two subtasks; the subtask-free projects get a single project-level
+    # participation each (the UI targets "Projektabgabe" in that case).
     part_skizzen_ansichten = Participation(
         supervisor=fach_user.id,
         student=student1.id,
@@ -1259,46 +1232,28 @@ def _seed_company_data(company):
         text="Hauptabmessungen eingetragen; Passungen besprochen. Ergänzung der Toleranzen folgt nach dem nächsten Gespräch.",
         is_done=False,
     )
-    part_cad_modell = Participation(
+    part_cad = Participation(
         supervisor=fach_user.id,
         student=student2.id,
-        project=task_cad_modell.id,
-        title=task_cad_modell.title,
-        text="Haltebolzen als 3D-Modell erzeugt, Teil-Länge und Gewinde in eine parametrisierte Tabelle übernommen. Auswirkung auf Varianten geprüft.",
-        is_done=True,
+        project=p_cad.id,
+        title=p_cad.title,
+        text="3D-Modell mit parametrisierter Tabelle erzeugt und die Auswirkung von Werteänderungen auf die Varianten geprüft. Anschliessend Passungen H7/g6 und FL-Toleranzen für Lagersitz und Dichtfläche ergänzt. Stückliste und Teiledaten zur Freigabe noch ausstehend.",
+        is_done=False,
     )
-    part_cad_passungen = Participation(
-        supervisor=fach_user.id,
-        student=student2.id,
-        project=task_cad_passungen.id,
-        title=task_cad_passungen.title,
-        text="Passungen H7/g6 ergänzt, FL-Toleranzen für Lagersitz und Dichtfläche ausgearbeitet. Prüfplan zur Freigabe noch ausstehend.",
-        is_done=True,
-    )
-    part_haube_feinentwurf = Participation(
+    part_haube = Participation(
         supervisor=admin.id,
         student=student3.id,
-        project=task_haube_feinentwurf.id,
-        title=task_haube_feinentwurf.title,
-        text="CAD-Feinentwurf überarbeitet, Deckel und Befestigung als Maschinenelemente ausgelegt und die Lagerdichtung vorgezeichnet.",
-        is_done=True,
-    )
-    part_haube_unterlagen = Participation(
-        supervisor=admin.id,
-        student=student3.id,
-        project=task_haube_unterlagen.id,
-        title=task_haube_unterlagen.title,
-        text="Kostenarten der Fertigung bewertet und Beschichtungsverfahren (Lackierung, Galvanisierung, Eloxal) verglichen. Fertigungsunterlagen finalisiert.",
+        project=p_haube.id,
+        title=p_haube.title,
+        text="Alle drei Phasen abgeschlossen: Grobentwurf mit Kostenüberblick, CAD-Feinentwurf mit Deckel und Befestigung als Maschinenelemente und die finalisierten Fertigungsunterlagen inklusive Beschichtungsvergleich (Lackierung, Galvanisierung, Eloxal).",
         is_done=True,
     )
     db.session.add_all(
         [
             part_skizzen_ansichten,
             part_skizzen_bemassen,
-            part_cad_modell,
-            part_cad_passungen,
-            part_haube_feinentwurf,
-            part_haube_unterlagen,
+            part_cad,
+            part_haube,
         ]
     )
     db.session.flush()
@@ -1321,7 +1276,7 @@ def _seed_company_data(company):
     eval_skizzen_goal = Eval(
         project=p_skizzen.id,
         target_type="goal",
-        goal="(LZ_7944 / MEM 11 09) Sie treffen Schutzmassnahmen zur Arbeitssicherheit und zum Gesundheitsschutz.",
+        goal="LZ_7944",
         student=student1.id,
         supervisor=fach_user.id,
         eval_text="Schutzbrille konsequent getragen und Zeichnungsunterlagen ordentlich aufbewahrt.",
@@ -1340,30 +1295,17 @@ def _seed_company_data(company):
         is_released=False,
         eval_released=False,
     )
-    eval_cad_task = Eval(
-        project=task_cad_modell.id,
-        participation=part_cad_modell.id,
-        target_type="task",
-        goal=task_cad_modell.title,
-        student=student2.id,
-        supervisor=fach_user.id,
-        eval_text="Sorgfältig strukturiertes Modell, Parameter sauber verknüpft. Lernziel vollständig erreicht (A).",
-        score_type="grade",
-        score_value=5.1,
-        is_released=True,
-        eval_released=True,
-    )
     eval_cad_project = Eval(
         project=p_cad.id,
         target_type="project",
         goal=p_cad.title,
         student=student2.id,
         supervisor=fach_user.id,
-        eval_text="Sven arbeitet sehr strukturiert. Die Stückliste inkl. Teiledaten ist noch offen.",
-        score_type=None,
-        score_value=None,
-        is_released=False,
-        eval_released=False,
+        eval_text="Zwischenstand: sorgfältig strukturiertes Modell, Parameter sauber verknüpft, Passungen und FL-Toleranzen fertigungs- und prüfgerecht (Ziel A). Die Stückliste inklusive Teiledaten ist noch offen.",
+        score_type="grade",
+        score_value=5.1,
+        is_released=True,
+        eval_released=True,
     )
     eval_haube_project = Eval(
         project=p_haube.id,
@@ -1371,29 +1313,16 @@ def _seed_company_data(company):
         goal=p_haube.title,
         student=student3.id,
         supervisor=admin.id,
-        eval_text="Livia hat das anspruchsvolle Projekt vollumfänglich abgeschlossen; Varianten und Kostenüberblick sind begründet dokumentiert.",
+        eval_text="Livia hat das anspruchsvolle Projekt vollumfänglich und selbstständig abgeschlossen. Feinentwurf und Maschinenelemente souverän beurteilt (Ziel A); Varianten, Kostenüberblick und Beschichtungsvergleich sind begründet dokumentiert.",
         score_type="grade",
         score_value=5.4,
-        is_released=True,
-        eval_released=True,
-    )
-    eval_haube_task = Eval(
-        project=task_haube_feinentwurf.id,
-        participation=part_haube_feinentwurf.id,
-        target_type="task",
-        goal=task_haube_feinentwurf.title,
-        student=student3.id,
-        supervisor=admin.id,
-        eval_text="Feinentwurf ausgereift, Maschinenelemente souverän beurteilt (Ziel A).",
-        score_type="grade",
-        score_value=5.2,
         is_released=True,
         eval_released=True,
     )
     eval_haube_goal = Eval(
         project=p_haube.id,
         target_type="goal",
-        goal="(LZ_9302 / xx d10 01) Sie setzen geeignete Planungsinstrumente ein.",
+        goal="LZ_9302",
         student=student3.id,
         supervisor=admin.id,
         eval_text="Planungsinstrumente (Meilensteinplan und Kontrollliste) zuverlässig und proaktiv eingesetzt.",
@@ -1405,10 +1334,8 @@ def _seed_company_data(company):
             eval_skizzen_task,
             eval_skizzen_goal,
             eval_skizzen_project,
-            eval_cad_task,
             eval_cad_project,
             eval_haube_project,
-            eval_haube_task,
             eval_haube_goal,
         ]
     )
@@ -1841,4 +1768,4 @@ def _seed_company_data(company):
 
 
 if __name__ == "__main__":
-    seed_database()
+    seed_database(force="--force" in sys.argv)

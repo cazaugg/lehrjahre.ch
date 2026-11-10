@@ -44,7 +44,14 @@ Seed demo data once (skipped if the database already has users):
 npm run seed
 ```
 
-(`npm run seed` runs `backend.seed` with the development environment and a local secret.)
+Reseed without existing data — this deletes the demo company's data folder
+(`app.db`, `documents/`) and its registry entries, then seeds everything fresh:
+
+```bash
+npm run seed -- --force
+```
+
+(`npm run seed` runs `backend.seed` with the development environment and a local secret; `--force` is equivalent to `python -m backend.seed --force`.)
 
 Create another company (tenant) — this also creates its data folder with an empty `app.db` and `documents/` — before adding its users:
 
@@ -55,7 +62,7 @@ LEHRJAHRE_ENV=development uv run python -m backend.companies list
 
 **Development-only demo accounts (Password: `Lehrjahre2026!`):**
 - **Berufsbildner:** `thomas.keller@vektorwerk.ch`
-- **HR / Rekrutierung:** `sandra.meier@vektorwerk.ch`
+- **Administratorin (Benutzerverwaltung):** `sandra.meier@vektorwerk.ch`
 - **Lernende (Konstrukteur/in EFZ, 1.–3. Lehrjahr):** `lea.buchmann@vektorwerk.ch`, `sven.hug@vektorwerk.ch`, `livia.kaelin@vektorwerk.ch`
 
 These demo accounts are for local development only. Do not seed them in production.
