@@ -901,6 +901,15 @@ function formatDate(d) {
             <div class="readonly-text-box" style="white-space: pre-line">
               {{ overallEval.eval_text || 'Keine Textbemerkung.' }}
             </div>
+            <a
+              v-if="overallEval.document_id"
+              class="btn btn-sm"
+              :href="`/api/evaluation/${overallEval.id}/file`"
+              target="_self"
+              style="margin-top: var(--space-2)"
+            >
+              Auswertungsdatei herunterladen ({{ overallEval.document?.filename }})
+            </a>
           </div>
 
           <!-- Auswertung pro Aufgabe -->

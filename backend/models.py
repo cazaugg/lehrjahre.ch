@@ -544,12 +544,17 @@ class Eval(db.Model):
     score_type = db.Column(db.String(50), nullable=True)  # 'grade' | 'percent' | None
     score_value = db.Column(db.Float, nullable=True)
     is_released = db.Column(db.Boolean, default=False, nullable=False)
+    # Optional attached evaluation file (PDF / Word), owned by the supervisor.
+    document_id = db.Column(
+        db.Integer, db.ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
     # Access-management flag, kept in sync with is_released.
     eval_released = db.Column(db.Boolean, default=False, nullable=False)
 
     student_user = db.relationship("User", foreign_keys=[student], lazy="joined")
     supervisor_user = db.relationship("User", foreign_keys=[supervisor], lazy="joined")
     project_rel = db.relationship("Project", foreign_keys=[project], lazy="joined")
+    document = db.relationship("Documents", foreign_keys=[document_id], lazy="joined")
 
     def to_dict(self):
         return {
@@ -573,6 +578,16 @@ class Eval(db.Model):
             ),
             "planning_text": self.planning_text or "",
             "eval_text": self.eval_text or "",
+            "document_id": self.document_id,
+            "document": (
+                {
+                    "id": self.document.id,
+                    "name": self.document.name,
+                    "filename": self.document.filename,
+                }
+                if self.document
+                else None
+            ),
             "score_type": self.score_type,
             "score_value": (
                 round(float(self.score_value), 2)

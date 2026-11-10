@@ -1339,6 +1339,27 @@ def _seed_company_data(company):
             eval_haube_goal,
         ]
     )
+    db.session.flush()
+
+    # 6b. Beispiel-Auswertungsdatei (PDF) an der freigegebenen CAD-Auswertung
+    eval_pdf_fn, eval_pdf_path = save_binary_document(
+        build_pdf_preview(), "Projektauswertung_CAD_Varianten.pdf", company.name
+    )
+    doc_eval_pdf = Documents(
+        name=f"Projektauswertung: {p_cad.title}",
+        description="Beigefügte Auswertungsdatei (PDF / Word)",
+        filename=eval_pdf_fn,
+        path=eval_pdf_path,
+        type="auswertung",
+        owner=fach_user.id,
+        author=fach_user.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+    db.session.add(doc_eval_pdf)
+    db.session.flush()
+    eval_cad_project.document_id = doc_eval_pdf.id
 
     # 7. Grades (/api/grades)
     db.session.add_all(
@@ -1675,6 +1696,23 @@ def _seed_company_data(company):
         is_done=True,
     )
 
+    # Beispiel für ein Ausbildungsgespräch als hochgeladene PDF/Word-Datei
+    gesp_pdf_fn, gesp_pdf_path = save_binary_document(
+        build_pdf_preview(), "Bildungsbericht_Lea_Buchmann.pdf", company.name
+    )
+    doc_gespraech_pdf = Documents(
+        name="Bildungsbericht 1. Semester (PDF)",
+        description="Ausgefüllter Bildungsbericht als hochgeladene PDF-Datei",
+        filename=gesp_pdf_fn,
+        path=gesp_pdf_path,
+        type="ausbildungsgespraech",
+        owner=student1.id,
+        author=admin.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+
     word_fn, word_path = save_binary_document(
         build_word_preview_docx(), "Word_Beispiel.docx", company.name
     )
@@ -1708,7 +1746,14 @@ def _seed_company_data(company):
     )
 
     db.session.add_all(
-        [doc_journal, doc_gespraech, doc_vertrag, doc_word, doc_pdf]
+        [
+            doc_journal,
+            doc_gespraech,
+            doc_gespraech_pdf,
+            doc_vertrag,
+            doc_word,
+            doc_pdf,
+        ]
     )
     db.session.flush()
 
@@ -1762,6 +1807,43 @@ def _seed_company_data(company):
                 parent_id=parent.id,
                 owner_user=owner_user,
             )
+
+    # Eine Wissenseite als hochgeladene PDF/Word-Datei (Statt Markdown-Text)
+    pdf_topic = next(
+        (
+            t
+            for t in KNOWLEDGE_TOPICS
+            if t["title"] == "Technisches Zeichnen & Messtechnik"
+        ),
+        None,
+    )
+    if pdf_topic:
+        parent_node = db.session.query(Knowledge).filter_by(title=pdf_topic["title"]).one()
+        wissen_pdf_fn, wissen_pdf_path = save_binary_document(
+            build_pdf_preview(), "Wissen_Messtechnik_Merkblatt.pdf", company.name
+        )
+        doc_wissen_pdf = Documents(
+            name="Messtechnik-Merkblatt (PDF)",
+            description="Praxis-Merkblatt als hochgeladene PDF-Datei",
+            filename=wissen_pdf_fn,
+            path=wissen_pdf_path,
+            type="wissen",
+            owner=student3.id,
+            author=student3.id,
+            is_template=False,
+            updated_date=datetime.now(timezone.utc),
+            is_done=True,
+        )
+        db.session.add(doc_wissen_pdf)
+        db.session.flush()
+        db.session.add(
+            Knowledge(
+                parent_id=parent_node.id,
+                title="Messtechnik-Merkblatt (PDF)",
+                description="Praxis-Merkblatt als hochgeladene PDF-Datei",
+                document_id=doc_wissen_pdf.id,
+            )
+        )
 
     db.session.commit()
     print("Database seeded successfully.")

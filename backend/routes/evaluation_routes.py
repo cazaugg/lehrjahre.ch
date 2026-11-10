@@ -1,5 +1,7 @@
-from flask import Blueprint, request, jsonify
-from backend.models import db, Eval, Project, Participation
+import os
+from datetime import datetime, timezone
+from flask import Blueprint, request, jsonify, send_file
+from backend.models import db, Eval, Project, Participation, Documents
 from backend.auth import login_required, get_current_user, can_access_student
 from backend.audit import audit
 from backend.policies import (
@@ -11,6 +13,15 @@ from backend.policies import (
     serialize_eval,
 )
 from backend.validation import parse_bool, parse_int, parse_str
+from backend.storage import (
+    save_uploaded_file,
+    delete_stored_file,
+    resolve_safe_path,
+)
+from backend import tenants
+
+# Nur PDF und Word-Dokumente dürfen als Auswertungsdatei beigefügt werden.
+EVAL_FILE_EXTENSIONS = {".pdf", ".docx", ".doc"}
 
 
 def _not_found():
@@ -179,6 +190,7 @@ def save_project_evaluation(project_id):
             child.is_completed = root_project.is_completed
 
     is_released = False
+    project_eval_record = None
     if student_id:
         if not can_access_student(actor, student_id):
             return _not_found()
@@ -229,11 +241,12 @@ def save_project_evaluation(project_id):
                 )
                 db.session.add(new_ev)
                 existing_evals.append(new_ev)
+            return match or new_ev
 
         # 1. Overall project evaluation for student
         proj_eval = data.get("project_eval")
         if isinstance(proj_eval, dict):
-            upsert_eval(
+            project_eval_record = upsert_eval(
                 root_project.id,
                 "project",
                 root_project.title,
@@ -292,7 +305,19 @@ def save_project_evaluation(project_id):
         released=is_released,
         completed=root_project.is_completed,
     )
-    return jsonify({"data": {"saved": True, "project_id": root_project.id}})
+    return jsonify(
+        {
+            "data": {
+                "saved": True,
+                "project_id": root_project.id,
+                # Needed by the frontend to attach/replace the evaluation
+                # file right after saving the evaluation itself.
+                "project_eval_id": (
+                    project_eval_record.id if project_eval_record else None
+                ),
+            }
+        }
+    )
 
 
 @bp.route("/<int:eval_id>", methods=["PUT"])
@@ -401,8 +426,13 @@ def delete_evaluation(eval_id):
 
     project_id = evaluation.project
     student_id = evaluation.student
+    attached_path = evaluation.document.path if evaluation.document else None
+    if evaluation.document:
+        db.session.delete(evaluation.document)
     db.session.delete(evaluation)
     db.session.commit()
+    if attached_path:
+        delete_stored_file(attached_path)
     audit(
         "evaluation_deleted",
         evaluation_id=eval_id,
@@ -410,3 +440,173 @@ def delete_evaluation(eval_id):
         student_id=student_id,
     )
     return jsonify({"data": {"deleted": eval_id}})
+
+
+def _eval_file_access_check(actor, evaluation):
+    """Return (status_code, error_dict) or None if access is allowed.
+
+    - Supervisors need their usual student/project permissions.
+    - The evaluated student may only see the file after release (or once the
+      project is completed), mirroring serialize_eval.
+    """
+    if is_student(actor):
+        if evaluation.student != actor.id:
+            return (_not_found())
+        root = evaluation.project_rel
+        if root is not None and root.parent_project is not None:
+            root = db.session.get(Project, root.parent_project)
+        released = bool(
+            evaluation.eval_released or evaluation.is_released
+            or (root is not None and root.is_completed)
+        )
+        if not released:
+            return (
+                jsonify(
+                    {"error": "Die Auswertung wurde noch nicht freigegeben."}
+                ),
+                403,
+            )
+        return None
+
+    if not is_supervisor(actor):
+        return (_not_found())
+    if not can_access_student(actor, evaluation.student) or not can_manage_project(
+        actor, evaluation.project_rel
+    ):
+        return (_not_found())
+    return None
+
+
+@bp.route("/<int:eval_id>/file", methods=["GET"])
+@login_required
+def download_eval_file(eval_id):
+    actor = get_current_user()
+    evaluation = db.session.get(Eval, eval_id)
+    if not evaluation or not evaluation.document:
+        return jsonify({"error": "Keine Auswertungsdatei gefunden."}), 404
+
+    denied = _eval_file_access_check(actor, evaluation)
+    if denied:
+        return denied
+
+    try:
+        abs_path = resolve_safe_path(evaluation.document.path)
+    except (ValueError, PermissionError):
+        return jsonify({"error": "Ungültiger Dateipfad."}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({"error": "Datei auf dem Server nicht gefunden."}), 404
+
+    as_attachment = request.args.get("download") == "1"
+    response = send_file(
+        abs_path,
+        as_attachment=as_attachment,
+        download_name=evaluation.document.filename,
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@bp.route("/<int:eval_id>/file", methods=["POST"])
+@login_required
+def upload_eval_file(eval_id):
+    """Attach (or replace) a PDF/Word file to a per-student project evaluation."""
+    actor = get_current_user()
+    if not is_supervisor(actor):
+        return jsonify(
+            {"error": "Auswertungsdateien können nur von Ausbildner/innen verwaltet werden."}
+        ), 403
+
+    evaluation = db.session.get(Eval, eval_id)
+    if not evaluation:
+        return jsonify({"error": "Bewertung nicht gefunden."}), 404
+    if not can_access_student(actor, evaluation.student) or not can_manage_project(
+        actor, evaluation.project_rel
+    ):
+        return _not_found()
+
+    uploaded_file = request.files.get("file")
+    if not uploaded_file or not uploaded_file.filename:
+        return jsonify({"error": "Bitte eine Datei hochladen."}), 400
+
+    ext = os.path.splitext(uploaded_file.filename)[1].lower()
+    if ext not in EVAL_FILE_EXTENSIONS:
+        return jsonify(
+            {"error": "Nur PDF- und Word-Dateien (.pdf, .docx, .doc) sind erlaubt."}
+        ), 400
+
+    try:
+        clean_filename, rel_path = save_uploaded_file(
+            uploaded_file, tenants.current_company().name
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    old_path = None
+    if evaluation.document:
+        old_path = evaluation.document.path
+        db.session.delete(evaluation.document)
+
+    doc = Documents(
+        name=f"Projektauswertung: {evaluation.goal}",
+        description=f"Beigefügte Auswertungsdatei ({ext.lstrip('.').upper()})",
+        filename=clean_filename,
+        path=rel_path,
+        type="auswertung",
+        owner=evaluation.supervisor or actor.id,
+        author=actor.id,
+        is_template=False,
+        updated_date=datetime.now(timezone.utc),
+        is_done=True,
+    )
+    db.session.add(doc)
+    db.session.flush()
+    evaluation.document_id = doc.id
+    evaluation.document = doc
+    db.session.commit()
+    if old_path:
+        delete_stored_file(old_path)
+
+    audit(
+        "evaluation_file_uploaded",
+        evaluation_id=evaluation.id,
+        project_id=evaluation.project,
+        student_id=evaluation.student,
+        filename=clean_filename,
+    )
+    return jsonify({"data": serialize_eval(evaluation, actor)}), 201
+
+
+@bp.route("/<int:eval_id>/file", methods=["DELETE"])
+@login_required
+def delete_eval_file(eval_id):
+    actor = get_current_user()
+    if not is_supervisor(actor):
+        return jsonify(
+            {"error": "Auswertungsdateien können nur von Ausbildner/innen verwaltet werden."}
+        ), 403
+
+    evaluation = db.session.get(Eval, eval_id)
+    if not evaluation:
+        return jsonify({"error": "Bewertung nicht gefunden."}), 404
+    if not can_access_student(actor, evaluation.student) or not can_manage_project(
+        actor, evaluation.project_rel
+    ):
+        return _not_found()
+
+    if not evaluation.document:
+        return jsonify({"error": "Keine Auswertungsdatei gefunden."}), 404
+
+    rel_path = evaluation.document.path
+    db.session.delete(evaluation.document)
+    evaluation.document_id = None
+    db.session.commit()
+    delete_stored_file(rel_path)
+
+    audit(
+        "evaluation_file_deleted",
+        evaluation_id=evaluation.id,
+        project_id=evaluation.project,
+        student_id=evaluation.student,
+    )
+    return jsonify({"data": {}})

@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 from contextlib import contextmanager
@@ -3463,6 +3464,243 @@ def test_spa_missing_dist_returns_404(client):
 
     assert client.get("/dashboard").status_code == 404
     assert client.get("/").status_code == 404
+
+
+PDF_BYTES = b"%PDF-1.4\n% test-document\n%%EOF\n"
+
+
+def _multipart_headers(csrf):
+    return {"X-CSRF-Token": csrf}
+
+
+def test_eval_file_upload_download_and_release_masking(client):
+    """Auswertungsdateien (PDF/Word) sind für Lernende erst nach der Freigabe sichtbar."""
+    csrf_t1, trainer = login(client, "trainer@vektorwerk.ch")
+    _, student1 = login(client, "student@vektorwerk.ch")
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+
+    res_proj = client.post(
+        "/api/project",
+        json={
+            "title": "Projekt mit Auswertungsdatei",
+            "description": "Testprojekt für Auswertungsdateien",
+            "goals": ["Ziel A"],
+            # Lernende/r soll Projekte & Auswertungen sehen können: Planung freigeben
+            "planning_released": True,
+        },
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_proj.status_code == 201
+    proj_id = res_proj.get_json()["data"]["id"]
+
+    res_save = client.post(
+        f"/api/evaluation/project/{proj_id}",
+        json={
+            "student": student1["id"],
+            "is_released": False,
+            "project_eval": {
+                "eval_text": "Saubere Arbeit mit Verbesserungspotenzial.",
+                "score_type": "grade",
+                "score_value": 5.2,
+            },
+        },
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_save.status_code == 200
+    eval_id = res_save.get_json()["data"]["project_eval_id"]
+    assert eval_id
+
+    # Ungültiger Dateityp wird abgelehnt
+    res_bad = client.post(
+        f"/api/evaluation/{eval_id}/file",
+        data={"file": (io.BytesIO(b"binary"), "skript.exe")},
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_bad.status_code == 400
+
+    # PDF hochladen
+    res_up = client.post(
+        f"/api/evaluation/{eval_id}/file",
+        data={"file": (io.BytesIO(PDF_BYTES), "Auswertung.pdf")},
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_up.status_code == 201
+    assert res_up.get_json()["data"]["document"]["filename"] == "Auswertung.pdf"
+
+    # Vorgesetzte/r kann die Datei abrufen
+    res_trainer_get = client.get(f"/api/evaluation/{eval_id}/file")
+    assert res_trainer_get.status_code == 200
+    assert res_trainer_get.data == PDF_BYTES
+
+    # Lernende/r: vor der Freigabe maskiert (Datei unsichtbar, Download 403)
+    login(client, "student@vektorwerk.ch")
+    s1_evals = client.get("/api/evaluation").get_json()["data"]
+    own_eval = next(e for e in s1_evals if e["id"] == eval_id)
+    assert own_eval["eval_text"] == ""
+    assert own_eval["document_id"] is None
+    assert own_eval["document"] is None
+    assert client.get(f"/api/evaluation/{eval_id}/file").status_code == 403
+
+    # Freigabe
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    res_rel = client.put(
+        f"/api/evaluation/{eval_id}",
+        json={"eval_released": True},
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_rel.status_code == 200
+
+    # Lernende/r sieht jetzt Text und Datei, Download funktioniert
+    login(client, "student@vektorwerk.ch")
+    s1_evals = client.get("/api/evaluation").get_json()["data"]
+    own_eval = next(e for e in s1_evals if e["id"] == eval_id)
+    assert own_eval["eval_text"] == "Saubere Arbeit mit Verbesserungspotenzial."
+    assert own_eval["document"]["filename"] == "Auswertung.pdf"
+    res_student_get = client.get(f"/api/evaluation/{eval_id}/file")
+    assert res_student_get.status_code == 200
+    assert res_student_get.data == PDF_BYTES
+
+    # Lernende/r darf Datei nicht verwalten
+    assert (
+        client.delete(
+            f"/api/evaluation/{eval_id}/file",
+            headers=_multipart_headers(csrf_t1),
+        ).status_code
+        == 403
+    )
+
+    # Ersetzen durch eine neue Version
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+    res_replace = client.post(
+        f"/api/evaluation/{eval_id}/file",
+        data={"file": (io.BytesIO(PDF_BYTES + b"v2"), "Auswertung_v2.docx")},
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_replace.status_code == 201
+    assert res_replace.get_json()["data"]["document"]["filename"] == "Auswertung_v2.docx"
+    assert client.get(f"/api/evaluation/{eval_id}/file").data == PDF_BYTES + b"v2"
+
+    # Löschen der Datei
+    res_del = client.delete(
+        f"/api/evaluation/{eval_id}/file",
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_del.status_code == 200
+    assert client.get(f"/api/evaluation/{eval_id}/file").status_code == 404
+    # Wird mit einer anderen Firma/ohne Berechtigung: fremder Trainer -> 404
+    login(client, "trainer2@vektorwerk.ch")
+    assert client.get(f"/api/evaluation/{eval_id}/file").status_code == 404
+
+
+def test_knowledge_accepts_pdf_upload_and_replacement(client):
+    """Wissenseiten können ohne Markdown-Text direkt als PDF/Word-Datei erfasst werden."""
+    csrf, _ = login(client, "trainer@vektorwerk.ch")
+
+    res = client.post(
+        "/api/knowledge",
+        data={
+            "title": "Messtechnik-Merkblatt",
+            "description": "Als PDF hinterlegt",
+            "file": (io.BytesIO(PDF_BYTES), "Merkblatt.pdf"),
+        },
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf),
+    )
+    assert res.status_code == 201
+    node = res.get_json()["data"]
+    assert node["document"]["filename"] == "Merkblatt.pdf"
+    assert node["content"] == ""
+
+    # Liste liefert für Datei-Seiten keinen Text, aber die Metadaten
+    node_list = client.get("/api/knowledge").get_json()["data"]
+    own = next(n for n in node_list if n["id"] == node["id"])
+    assert own["content"] == ""
+    assert own["document"]["filename"] == "Merkblatt.pdf"
+
+    # Datei ersetzen (PDF -> DOCX)
+    res_put = client.put(
+        f"/api/knowledge/{node['id']}",
+        data={
+            "title": "Messtechnik-Merkblatt (V2)",
+            "file": (io.BytesIO(b"worddoc"), "Merkblatt_v2.docx"),
+        },
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf),
+    )
+    assert res_put.status_code == 200
+    updated = res_put.get_json()["data"]
+    assert updated["title"] == "Messtechnik-Merkblatt (V2)"
+    assert updated["document"]["filename"] == "Merkblatt_v2.docx"
+
+    # Download über den generischen Dokument-Endpunkt
+    res_file = client.get(f"/api/documents/{node['document']['id']}/file")
+    assert res_file.status_code == 200
+    assert res_file.data == b"worddoc"
+
+    # Ungültiger Dateityp wird abgelehnt
+    res_bad = client.post(
+        "/api/knowledge",
+        data={
+            "title": "Ungültig",
+            "file": (io.BytesIO(b"shell"), "tool.sh"),
+        },
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf),
+    )
+    assert res_bad.status_code == 400
+
+
+def test_document_put_replaces_uploaded_file(client):
+    """PUT /api/documents akzeptiert multipart/form-data und ersetzt die Datei."""
+    csrf_t1, trainer = login(client, "trainer@vektorwerk.ch")
+    _, student1 = login(client, "student@vektorwerk.ch")
+    csrf_t1, _ = login(client, "trainer@vektorwerk.ch")
+
+    res = client.post(
+        "/api/documents",
+        data={
+            "file": (io.BytesIO(PDF_BYTES), "Protokoll.pdf"),
+            "name": "Ausbildungsgespräch Q1",
+            "type": "ausbildungsgespraech",
+            "owner": str(student1["id"]),
+            "is_done": "true",
+        },
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res.status_code == 201
+    doc = res.get_json()["data"]
+    doc_id = doc["id"]
+
+    # Selbstgelegte alte Datei ermitteln (für die Löschprüfung)
+    with company_context(client):
+        stored_doc = db.session.get(Documents, doc_id)
+        old_path = stored_doc.path
+        old_abs = resolve_safe_path(old_path)
+    assert os.path.isfile(old_abs)
+
+    # Datei über PUT ersetzen
+    res_put = client.put(
+        f"/api/documents/{doc_id}",
+        data={
+            "file": (io.BytesIO(PDF_BYTES + b"replacement"), "Protokoll_v2.pdf"),
+            "name": "Ausbildungsgespräch Q1 (zubereitet)",
+        },
+        content_type="multipart/form-data",
+        headers=_multipart_headers(csrf_t1),
+    )
+    assert res_put.status_code == 200
+    updated = res_put.get_json()["data"]
+    assert updated["filename"] == "Protokoll_v2.pdf"
+    assert updated["name"] == "Ausbildungsgespräch Q1 (zubereitet)"
+
+    # Inhalt ist die neue Datei; alte Datei wurde vom Server gelöscht
+    res_file = client.get(f"/api/documents/{doc_id}/file")
+    assert res_file.data == PDF_BYTES + b"replacement"
+    assert not os.path.isfile(old_abs)
 
 
 # ---------------------------------------------------------------------------

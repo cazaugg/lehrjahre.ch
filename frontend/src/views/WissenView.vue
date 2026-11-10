@@ -24,6 +24,10 @@ const formParentId = ref('')
 const formTitle = ref('')
 const formDescription = ref('')
 const formContent = ref('')
+// Gewinnungsart der Wissenseite: Markdown-Text oder PDF/Word-Datei
+const formMode = ref('text') // 'text' | 'file'
+const formFile = ref(null)
+const wasFileMode = ref(false)
 
 function canManage(node) {
   return Boolean(node) && node.owner === auth.user?.id
@@ -97,6 +101,20 @@ function toggleExpand(node) {
   expandedIds.value[node.id] = !expandedIds.value[node.id]
 }
 
+function isFileNode(node) {
+  if (!node?.document_id) return false
+  const fn = (node.document?.filename || '').toLowerCase()
+  return !fn.endsWith('.md') && !fn.endsWith('.txt')
+}
+
+function onKnowledgeFileChange(event) {
+  formFile.value = event.target.files?.[0] || null
+  if (formFile.value && !formTitle.value) {
+    const base = formFile.value.name.replace(/\.[^.]+$/, '')
+    formTitle.value = base
+  }
+}
+
 function openCreate(parentId = '') {
   error.value = ''
   editingNode.value = null
@@ -104,6 +122,9 @@ function openCreate(parentId = '') {
   formTitle.value = ''
   formDescription.value = ''
   formContent.value = ''
+  formMode.value = 'text'
+  formFile.value = null
+  wasFileMode.value = false
   showEditor.value = true
 }
 
@@ -114,6 +135,9 @@ function startEdit(node) {
   formTitle.value = node.title
   formDescription.value = node.description || ''
   formContent.value = node.content || ''
+  wasFileMode.value = isFileNode(node)
+  formMode.value = wasFileMode.value ? 'file' : 'text'
+  formFile.value = null
   showEditor.value = true
 }
 
@@ -125,36 +149,75 @@ function closeEditor() {
 async function saveNode() {
   error.value = ''
   try {
+    const commonFields = () => {
+      const fd = new FormData()
+      if (formParentId.value) {
+        fd.append('parent_id', String(formParentId.value))
+      } else {
+        fd.append('parent_id', '')
+      }
+      fd.append('title', formTitle.value)
+      fd.append('description', formDescription.value)
+      return fd
+    }
+
     if (editingNode.value) {
       const node = editingNode.value
-      await apiFetch(`/api/knowledge/${node.id}`, {
-        method: 'PUT',
-        body: {
-          parent_id: formParentId.value || null,
-          title: formTitle.value,
-          description: formDescription.value,
-          content: formContent.value
+      if (formMode.value === 'file' && !formFile.value && !wasFileMode.value) {
+        // Umwandlung Text -> Datei bzw. neue Datei-Seite: Datei erforderlich
+        error.value = 'Bitte wählen Sie eine PDF- oder Word-Datei aus.'
+        return
+      } else if (formMode.value === 'file') {
+        // Datei-Seite: Metadaten (und optional die neue Datei) speichern
+        const fd = commonFields()
+        if (formFile.value) {
+          fd.append('file', formFile.value)
         }
-      })
+        await apiFetch(`/api/knowledge/${node.id}`, { method: 'PUT', body: fd })
+      } else {
+        await apiFetch(`/api/knowledge/${node.id}`, {
+          method: 'PUT',
+          body: {
+            parent_id: formParentId.value || null,
+            title: formTitle.value,
+            description: formDescription.value,
+            content: formContent.value
+          }
+        })
+      }
       expandedIds.value[node.id] = true
       if (node.parent_id) {
         expandedIds.value[node.parent_id] = true
       }
     } else {
-      const created = await apiFetch('/api/knowledge', {
-        method: 'POST',
-        body: {
-          parent_id: formParentId.value || null,
-          title: formTitle.value,
-          description: formDescription.value,
-          content:
-            formContent.value ||
-            `# ${formTitle.value}\n\n${formDescription.value}`
+      if (formMode.value === 'file') {
+        if (!formFile.value) {
+          error.value = 'Bitte wählen Sie eine PDF- oder Word-Datei aus.'
+          return
         }
-      })
-      expandedIds.value[created.id] = true
-      if (created.parent_id) {
-        expandedIds.value[created.parent_id] = true
+        const fd = commonFields()
+        fd.append('file', formFile.value)
+        const created = await apiFetch('/api/knowledge', { method: 'POST', body: fd })
+        expandedIds.value[created.id] = true
+        if (created.parent_id) {
+          expandedIds.value[created.parent_id] = true
+        }
+      } else {
+        const created = await apiFetch('/api/knowledge', {
+          method: 'POST',
+          body: {
+            parent_id: formParentId.value || null,
+            title: formTitle.value,
+            description: formDescription.value,
+            content:
+              formContent.value ||
+              `# ${formTitle.value}\n\n${formDescription.value}`
+          }
+        })
+        expandedIds.value[created.id] = true
+        if (created.parent_id) {
+          expandedIds.value[created.parent_id] = true
+        }
       }
     }
     showEditor.value = false
@@ -260,13 +323,55 @@ async function deleteNode(node) {
           </div>
         </div>
 
+        <!-- Umschaltung: Markdown-Text oder PDF/Word-Datei -->
+        <div class="tabs" style="margin-bottom: var(--space-4)">
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: formMode === 'text' }"
+            @click="formMode = 'text'"
+          >
+            Text (Markdown)
+          </button>
+          <button
+            type="button"
+            class="tab-btn"
+            :class="{ active: formMode === 'file' }"
+            @click="formMode = 'file'"
+          >
+            Datei hochladen (PDF / Word)
+          </button>
+        </div>
+
         <MarkdownEditor
+          v-if="formMode === 'text'"
           v-model="formContent"
           :full-page="true"
           :owner-id="auth.user?.id"
           attachment-type="wissen"
           placeholder="Verfassen Sie hier Ihre Fachnotizen, Formelsammlungen ($v_c = \pi \cdot d \cdot n$) und fügen Sie Bilder oder Dokumente ein..."
         />
+
+        <div v-else class="file-upload-box">
+          <div class="form-group">
+            <label class="form-label">
+              PDF- oder Word-Datei {{ wasFileMode ? 'ersetzen (optional)' : '*' }}
+            </label>
+            <input
+              type="file"
+              class="form-control"
+              accept="application/pdf,.pdf,.doc,.docx"
+              :required="!wasFileMode"
+              @change="onKnowledgeFileChange"
+            />
+          </div>
+          <div v-if="wasFileMode" class="text-muted" style="font-size: 0.88rem">
+            Aktuelle Datei: {{ editingNode?.document?.filename || '–' }}
+          </div>
+          <div class="text-muted" style="font-size: 0.88rem">
+            Die Datei wird im Firmenordner gespeichert und mit dem Download-Button an der Wissensseite heruntergeladen.
+          </div>
+        </div>
       </div>
     </form>
 
@@ -406,6 +511,12 @@ async function deleteNode(node) {
                       <div class="flex-gap">
                         <strong>{{ page.title }}</strong>
                         <span
+                          v-if="isFileNode(page)"
+                          class="badge badge-neutral"
+                        >
+                          PDF / Word
+                        </span>
+                        <span
                           v-if="auth.isTrainer && page.author_name"
                           class="badge badge-neutral"
                         >
@@ -473,6 +584,13 @@ async function deleteNode(node) {
   display: flex;
   flex-direction: column;
   padding-left: var(--space-4);
+}
+
+.file-upload-box {
+  padding: var(--space-4);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
 }
 
 .page-card {
