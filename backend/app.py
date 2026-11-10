@@ -52,6 +52,20 @@ def create_app(config_overrides: dict | None = None) -> Flask:
             "Debug mode is only allowed when LEHRJAHRE_ENV=development."
         )
 
+    # Signup and invitations mail one-time links; surface a missing SMTP
+    # configuration immediately instead of failing at request time. The
+    # development outbox (no SMTP_HOST, IS_DEV) still works but is not a
+    # real transport, so it is reported as unconfigured.
+    mail_configured = bool(app.config.get("SMTP_HOST"))
+    app.config["MAIL_CONFIGURED"] = mail_configured
+    if not is_dev and not mail_configured:
+        if app.config.get("SIGNUP_ENABLED", True):
+            app.logger.warning(
+                "SMTP_HOST is not configured: company signups and user "
+                "invitations will fail until outgoing mail is set up. Set "
+                "SIGNUP_ENABLED=0 to disable public signups meanwhile."
+            )
+
     # Reverse proxy / WAF support (X-Forwarded-For, X-Forwarded-Proto, X-Forwarded-Host)
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
@@ -156,7 +170,13 @@ def create_app(config_overrides: dict | None = None) -> Flask:
 
     @app.route("/api/health")
     def api_health():
-        return jsonify({"service": "lehrjahre.ch API", "status": "ok"})
+        return jsonify(
+            {
+                "service": "lehrjahre.ch API",
+                "status": "ok",
+                "mail_configured": bool(app.config.get("MAIL_CONFIGURED")),
+            }
+        )
 
     @app.errorhandler(404)
     def not_found(error):

@@ -4010,3 +4010,60 @@ def test_user_invite_accept_without_company_id_rejected(client):
         json={"token": token, "password": "NeuesPasswort1!"},
     )
     assert res.status_code == 400
+
+
+def test_health_reports_mail_configuration(client):
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["status"] == "ok"
+    # Test fixture disables SMTP explicitly -> mail is "not configured",
+    # which development outbox handling covers.
+    assert data["mail_configured"] is False
+
+
+def test_production_without_smtp_warns_at_startup(tmp_path, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="backend.app"):
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'c.db'}",
+                "COMPANY_ROOT": str(tmp_path / "companies"),
+                "SECRET_KEY": "x" * 40,
+                "IS_DEV": False,
+                "DEBUG": False,
+                "SESSION_COOKIE_SECURE": True,
+                "SMTP_HOST": "",
+                "MAIL_DEV_OUTBOX": str(tmp_path / "outbox.log"),
+                "SIGNUP_ENABLED": True,
+            }
+        )
+    assert any(
+        "SMTP_HOST is not configured" in record.message for record in caplog.records
+    )
+    assert (
+        app.test_client().get("/api/health").get_json()["mail_configured"] is False
+    )
+
+
+def test_startup_warning_suppressed_when_signup_disabled(tmp_path, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="backend.app"):
+        app = create_app(
+            {
+                "TESTING": True,
+                "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'c.db'}",
+                "COMPANY_ROOT": str(tmp_path / "companies"),
+                "SECRET_KEY": "x" * 40,
+                "IS_DEV": False,
+                "DEBUG": False,
+                "SESSION_COOKIE_SECURE": True,
+                "SMTP_HOST": "",
+                "SIGNUP_ENABLED": False,
+            }
+        )
+    assert not any("SMTP_HOST is not configured" in record.message for record in caplog.records)
+    assert app.test_client().get("/api/health").get_json()["mail_configured"] is False

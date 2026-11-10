@@ -14,6 +14,17 @@
 - Demo-Zugänge
 - Fehlermeldungen
 
+## Registrierung & Einladungen
+
+- Öffentliche Firmen-Registrierung (`/registrierung`) mit E-Mail-Bestätigung:
+  die Firmen-E-Mail-Domain wird zur Firmen-Domain, öffentliche Mail-Provider
+  werden abgelehnt
+- Erste Person wird Administrator/in, Login direkt nach der Bestätigung
+- Benutzer werden von der Verwaltung erfasst; Einladungs-E-Mail an die
+  Firmen-Adresse stellt den Login her (Link gültig 7 Tage), das Passwort
+  setzt die Person selbst über den Link (`/einladung`)
+- "Einladung erneut senden" (Verwaltung) für ausstehende Passwörter
+
 ## Projekte, Themen & Praktika
 
 Zugriff:
