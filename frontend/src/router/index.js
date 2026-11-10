@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import IndexView from '../views/IndexView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegistrierenView from '../views/RegistrierenView.vue'
 import RegistrierungBestaetigenView from '../views/RegistrierungBestaetigenView.vue'
@@ -16,7 +17,7 @@ import PersonenView from '../views/PersonenView.vue'
 import AccountView from '../views/AccountView.vue'
 
 const routes = [
-  { path: '/', redirect: '/projekte' },
+  { path: '/', name: 'index', component: IndexView, meta: { public: true } },
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
   { path: '/registrierung', name: 'registrierung', component: RegistrierenView, meta: { public: true } },
   {
@@ -90,6 +91,9 @@ router.beforeEach(async (to) => {
   }
   if (!to.meta.public && !auth.user) {
     return { name: 'login' }
+  }
+  if (to.name === 'index' && auth.user) {
+    return { name: 'projekte' }
   }
   if (to.name === 'login' && auth.user) {
     return { name: 'projekte' }
