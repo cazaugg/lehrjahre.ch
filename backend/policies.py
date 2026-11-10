@@ -132,6 +132,8 @@ def can_edit_student_master_data(actor: User | None, target: User | None) -> boo
 def serialize_user(target: User, actor: User | None) -> dict:
     """Serialize a User while stripping private contact fields if unauthorized."""
     data = target.to_dict()
+    # Pending first-login invitation (admins use it for the resend button).
+    data["password_pending"] = bool(target.invite_token_hash)
     if can_view_private_contacts(actor, target):
         data["can_view_private"] = True
     else:

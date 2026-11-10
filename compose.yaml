@@ -54,6 +54,16 @@ services:
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY (min. 32 chars) in .env}
       DATABASE_URL: sqlite:////data/lehrjahre.ch/app/control.db
       LEHRJAHRE_COMPANY_ROOT: /data/lehrjahre.ch/app
+      LEHRJAHRE_PUBLIC_URL: https://${DOMAIN:?Set DOMAIN in .env}
+      # Outgoing mail (signup verification) from MAIL_FROM; requires an
+      # SMTP account, e.g. kontakt@lehrjahre.ch.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-kontakt@lehrjahre.ch}
+      SIGNUP_ENABLED: ${SIGNUP_ENABLED:-1}
+      USER_INVITE_TTL_HOURS: ${USER_INVITE_TTL_HOURS:-168}
     volumes:
       - /data/lehrjahre.ch/app:/data/lehrjahre.ch/app
     security_opt:

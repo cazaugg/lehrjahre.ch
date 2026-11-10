@@ -1,8 +1,21 @@
+import hashlib
 from datetime import date
+from datetime import datetime, timedelta, timezone as dt_timezone
 from sqlalchemy import func
-from flask import Blueprint, request, jsonify, g, session
+from flask import Blueprint, request, jsonify, g, session, current_app
 from backend import tenants
-from backend.models import db, User, UserRelation, UserRouting, Project, Documents
+from backend.models import (
+    db,
+    Company,
+    User,
+    UserRelation,
+    UserRouting,
+    Project,
+    Documents,
+    user_apply_invite,
+    user_clear_invite,
+    INVITED_PASSWORD_HASH,
+)
 from backend.auth import (
     login_required,
     role_required,
@@ -10,8 +23,11 @@ from backend.auth import (
     hash_password,
     verify_password,
     bump_session_version,
+    ensure_csrf_token,
 )
+from backend.mail import MailDeliveryError, send_user_invite
 from backend.audit import audit
+from backend.ratelimit import invite_ip_limiter, invite_token_limiter
 from backend.storage import delete_stored_file
 from backend.policies import (
     is_supervisor,
@@ -24,6 +40,75 @@ from backend.policies import (
 from backend.validation import parse_int, parse_str
 
 bp = Blueprint("api_user", __name__, url_prefix="/api/user")
+
+MAX_PASSWORD_LEN = 512
+
+
+def _utcnow():
+    """SQLite drops timezones on DateTime round-trips; use naive UTC."""
+    return datetime.now(dt_timezone.utc).replace(tzinfo=None)
+
+
+def _new_invite_token(user) -> str:
+    """Bind a fresh one-time invitation token; caller persists (commit)."""
+    ttl_hours = int(current_app.config.get("USER_INVITE_TTL_HOURS") or 168)
+    return user_apply_invite(user, _utcnow() + timedelta(hours=ttl_hours))
+
+
+def _send_invite_mail(user, company, token: str, resent: bool = False) -> bool:
+    """Mail the invitation link for `token` to the user's company address.
+
+    Invitations are always sent to company e-mails: the address is bound to
+    the (mailbox-proven) company domain and a free-text private address can
+    never be an ownership guarantee.
+
+    Returns whether the mail could NOT be delivered (already audited).
+    """
+    base_url = current_app.config.get("LEHRJAHRE_PUBLIC_URL") or ""
+    verify_url = f"{base_url}/einladung?token={token}&c={company.id}"
+    try:
+        send_user_invite(
+            user.company_email,
+            f"{user.name} {user.surname}".strip(),
+            company.name,
+            verify_url,
+        )
+    except MailDeliveryError:
+        audit(
+            "user_invite_mail_failed",
+            user_id=user.id,
+            company_id=user.company_id,
+            resent=resent,
+        )
+        return True
+    audit(
+        "user_invite_created",
+        user_id=user.id,
+        company_id=user.company_id,
+        resent=resent,
+    )
+    return False
+    try:
+        send_user_invite(
+            user.company_email,
+            f"{user.name} {user.surname}".strip(),
+            company.name,
+            verify_url,
+        )
+    except MailDeliveryError:
+        audit(
+            "user_invite_mail_failed",
+            user_id=user.id,
+            company_id=user.company_id,
+        )
+        return True
+    audit(
+        "user_invite_created",
+        user_id=user.id,
+        company_id=user.company_id,
+        resent=False,
+    )
+    return False
 
 CONTACT_FIELDS = [
     "private_address",
@@ -172,26 +257,26 @@ def create_user():
     if raw_role != role or role not in {"lernender", "ausbildner", "admin"}:
         return jsonify({"error": "Ungültige Rolle."}), 400
 
+    if "password" in data:
+        return jsonify(
+            {
+                "error": (
+                    "Das Passwort wird von der Person selbst per "
+                    "Einladungs-E-Mail gesetzt."
+                )
+            }
+        ), 400
+
     name = parse_str(data.get("name"), "Vorname")
     surname = parse_str(data.get("surname"), "Nachname")
     company_email = parse_str(data.get("company_email"), "Firmen-E-Mail").lower()
     job_title = parse_str(data.get("job_title"), "Beruf/Funktion")
-    password = parse_str(
-        data.get("password"), "Passwort", default="", strip=False
-    )
 
     if not name or not surname or not company_email or not job_title:
         return jsonify(
             {
                 "error": "Vorname, Nachname, Firmen-E-Mail und Beruf/Funktion sind Pflichtfelder."
             }
-        ), 400
-
-    if not password:
-        return jsonify({"error": "Passwort ist erforderlich."}), 400
-    if len(password) < 8:
-        return jsonify(
-            {"error": "Das Passwort muss mindestens 8 Zeichen lang sein."}
         ), 400
 
     if not company or not company.matches_email(company_email):
@@ -229,7 +314,9 @@ def create_user():
         name=name,
         surname=surname,
         company_id=actor.company_id,
-        password_hash=hash_password(password),
+        # Unusable stand-in hash: the person sets their own password via the
+        # invitation link (see invite_accept). Keeps login timing identical.
+        password_hash=INVITED_PASSWORD_HASH,
         private_address=parse_str(data.get("private_address"), "Private Adresse"),
         private_email=parse_str(data.get("private_email"), "Private E-Mail"),
         private_phone=parse_str(data.get("private_phone"), "Private Telefonnummer"),
@@ -249,7 +336,11 @@ def create_user():
     db.session.add(new_user)
     db.session.flush()  # assigns the tenant id shared by the routing row
     sync_user_routing(new_user)
+    # The token is persisted before the mail goes out: a sent link always
+    # matches the stored hash.
+    invite_token = _new_invite_token(new_user)
     db.session.commit()
+    mail_failed = _send_invite_mail(new_user, company, invite_token)
     audit(
         "user_created",
         user_id=new_user.id,
@@ -275,8 +366,159 @@ def create_user():
         )
         _invalidate_supervised_cache()
 
-    return jsonify({"data": serialize_user(new_user, actor)}), 201
+    payload = serialize_user(new_user, actor)
+    if mail_failed:
+        payload["invite_mail_failed"] = True
+    return jsonify({"data": payload}), 201
 
+
+@bp.route("/invite/accept", methods=["POST"])
+def invite_accept():
+    """First-login invitation: the token holder sets their own password and
+    is logged in. Unauthenticated; the one-time token is the capability."""
+    data = request.get_json(silent=True) or {}
+
+    ip_key = f"ip:{request.remote_addr or 'unknown'}"
+    limited = _invite_rate_limited(invite_ip_limiter, ip_key)
+    if limited is not None:
+        return limited
+
+    token = (parse_str(data.get("token"), "Token", default="") or "").strip()
+    company_id = parse_int(
+        data.get("company_id"), "Firma", allow_none=True, min_value=1
+    )
+    password = parse_str(
+        data.get("password"), "Passwort", default="", strip=False
+    )
+
+    invalid_response = jsonify(
+        {"error": "Der Einladungslink ist ungültig oder bereits verwendet."}
+    ), 400
+
+    if not token or len(token) > 128 or any(c.isspace() for c in token):
+        invite_ip_limiter.hit(ip_key)
+        audit("user_invite_invalid")
+        return invalid_response
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_key = f"token:{token_hash}"
+    limited = _invite_rate_limited(invite_token_limiter, token_key)
+    if limited is not None:
+        return limited
+    invite_token_limiter.hit(token_key)
+    invite_ip_limiter.hit(ip_key)
+
+    if company_id is None:
+        audit("user_invite_invalid")
+        return invalid_response
+
+    if password_errors := _validate_password(password):
+        return jsonify({"error": password_errors}), 400
+
+    company = db.session.get(Company, int(company_id))
+    if company is None:
+        audit("user_invite_invalid")
+        return invalid_response
+
+    # Login activation runs entirely inside the company database.
+    with tenants.tenant_context(company):
+        user = User.query.filter(User.invite_token_hash == token_hash).first()
+        if user is None or not user.invite_expires_at:
+            audit("user_invite_invalid")
+            return invalid_response
+        if _utcnow() >= user.invite_expires_at:
+            audit("user_invite_expired")
+            return jsonify(
+                {
+                    "error": (
+                        "Der Einladungslink ist abgelaufen. Bitten Sie Ihre "
+                        "Verwaltung, die Einladung erneut zu senden."
+                    )
+                }
+            ), 400
+
+        user.password_hash = hash_password(password)
+        user_clear_invite(user)
+        bump_session_version(user)
+        db.session.commit()
+        payload_user = serialize_user(user, user)
+        ids = {
+            "user_id": int(user.id),
+            "company_id": int(company.id),
+            "session_version": int(user.session_version or 0),
+        }
+
+    session.clear()
+    session.permanent = True
+    session["user_id"] = ids["user_id"]
+    session["company_id"] = ids["company_id"]
+    session["session_version"] = ids["session_version"]
+    csrf_token = ensure_csrf_token()
+    audit("user_invite_accepted", user_id=ids["user_id"], company_id=company.id)
+    return jsonify(
+        {
+            "data": {
+                "user": payload_user,
+                "csrf_token": csrf_token,
+                "mem_professions": current_app.config["MEM_PROFESSIONS"],
+                "trainer_functions": current_app.config["TRAINER_FUNCTIONS"],
+            }
+        }
+    )
+
+
+def _invite_rate_limited(limiter, key):
+    retry_after = limiter.retry_after(key)
+    if retry_after is not None:
+        response = jsonify(
+            {"error": "Zu viele Anfragen. Bitte später erneut versuchen."}
+        )
+        response.status_code = 429
+        response.headers["Retry-After"] = str(max(1, int(retry_after)))
+        return response
+    return None
+
+
+def _validate_password(password: str) -> str | None:
+    if not password:
+        return "Passwort ist erforderlich."
+    if len(password) < 8:
+        return "Das Passwort muss mindestens 8 Zeichen lang sein."
+    if len(password) > MAX_PASSWORD_LEN:
+        return "Das Passwort ist zu lang."
+    if "\x00" in password:
+        return "Das Passwort enthält ungültige Zeichen."
+    return None
+
+
+@bp.route("/<int:user_id>/invite/resend", methods=["POST"])
+@role_required("admin")
+def invite_resend(user_id):
+    actor = get_current_user()
+    target = db.session.get(User, user_id)
+    if not target or target.company_id != actor.company_id:
+        return jsonify({"error": "Benutzer nicht gefunden."}), 404
+
+    if not bool(target.invite_token_hash):
+        return jsonify(
+            {"error": "Diese Person hat bereits ein Passwort gesetzt."}
+        ), 400
+
+    company = tenants.current_company()
+    # New token first (invalidates older links), persisted, then re-sent.
+    invite_token = _new_invite_token(target)
+    db.session.commit()
+    mail_failed = _send_invite_mail(target, company, invite_token, resent=True)
+    if mail_failed:
+        return jsonify(
+            {
+                "error": (
+                    "Die Einladungs-E-Mail konnte gerade nicht gesendet "
+                    "werden. Bitte versuchen Sie es später erneut."
+                )
+            }
+        ), 502
+    return jsonify({"data": {"resent": target.id, "password_pending": True}})
 
 @bp.route("/<int:user_id>", methods=["PUT"])
 @login_required
@@ -431,6 +673,8 @@ def update_user(user_id):
             return jsonify({"error": "Keine Berechtigung."}), 403
         target.password_hash = hash_password(new_pw)
         bump_session_version(target)
+        # Any outstanding invitation link dies once a password exists.
+        user_clear_invite(target)
 
     sync_user_routing(target)
     db.session.commit()

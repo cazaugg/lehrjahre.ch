@@ -36,7 +36,7 @@ TENANT_TABLES = frozenset(
         "knowledge",
     }
 )
-CONTROL_TABLES = frozenset({"company", "user_routing"})
+CONTROL_TABLES = frozenset({"company", "user_routing", "company_signup"})
 
 _APP_EXT_KEY = "lehrjahre_tenants"
 

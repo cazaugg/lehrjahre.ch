@@ -79,16 +79,39 @@ export const useAuthStore = defineStore('auth', () => {
       method: 'POST',
       body: { email, password }
     })
+    return _applyLoginData(data)
+  }
+
+  function _applyLoginData(data) {
     user.value = data.user
     setCsrfToken(data.csrf_token)
     memProfessions.value = data.mem_professions || []
     trainerFunctions.value = data.trainer_functions || []
 
     if (isTrainer.value) {
-      await loadCompanyStudents()
-    } else {
-      selectedStudentId.value = user.value.id
+      return loadCompanyStudents()
     }
+    selectedStudentId.value = user.value.id
+  }
+
+  // Completes a company signup via its one-time verification token; the
+  // backend answers with the same envelope as a login (user is logged in).
+  async function verifyCompanySignup(token) {
+    const data = await apiFetch('/api/company-signup/verify', {
+      method: 'POST',
+      body: { token }
+    })
+    return _applyLoginData(data)
+  }
+
+  // Accepts a first-login invitation: sets the own password, backend logs
+  // the person in (same envelope as a login).
+  async function acceptInvite(token, password, companyId) {
+    const data = await apiFetch('/api/user/invite/accept', {
+      method: 'POST',
+      body: { token, password, company_id: companyId }
+    })
+    return _applyLoginData(data)
   }
 
   async function logout() {
@@ -118,6 +141,8 @@ export const useAuthStore = defineStore('auth', () => {
     fetchMe,
     loadCompanyStudents,
     login,
+    verifyCompanySignup,
+    acceptInvite,
     logout
   }
 })

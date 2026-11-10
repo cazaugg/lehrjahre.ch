@@ -48,7 +48,6 @@ const newCompanyPhone = ref('')
 const newJobTitle = ref('')
 const newStartDate = ref('')
 const newEndDate = ref('')
-const newPassword = ref('')
 const newSupervisorId = ref('')
 
 // Per-student supervisor select map
@@ -144,7 +143,6 @@ function openCreateUser(role = 'lernender') {
         : auth.trainerFunctions[1] || 'Berufsbildner'
   newStartDate.value = role === 'lernender' ? '2026-08-10' : ''
   newEndDate.value = role === 'lernender' ? '2030-07-31' : ''
-  newPassword.value = ''
   newSupervisorId.value = supervisors.value[0]?.id || ''
   showUserModal.value = true
 }
@@ -163,7 +161,6 @@ async function createUser() {
         job_title: newJobTitle.value,
         start_date: newStartDate.value || null,
         end_date: newEndDate.value || null,
-        password: newPassword.value,
         supervisor_id: newRole.value === 'lernender' ? newSupervisorId.value : null
       }
     })
@@ -171,6 +168,12 @@ async function createUser() {
     searchQuery.value = ''
     filterRole.value = ''
     expandedIds.value[created.id] = true
+    if (created.invite_mail_failed) {
+      error.value =
+        'Person erfasst, aber die Einladungs-E-Mail konnte nicht gesendet werden. Verwenden Sie «Einladung erneut senden».'
+    } else {
+      message.value = `Person erfasst. Eine Einladungs-E-Mail wurde an ${created.company_email} gesendet — das Passwort setzt die Person selbst über den Link.`
+    }
     await loadUsers()
   } catch (e) {
     error.value = e.message
@@ -190,6 +193,18 @@ function startEditPerson(person) {
 
 function cancelEditPerson() {
   editingPersonId.value = null
+}
+
+async function resendInvite(person) {
+  error.value = ''
+  message.value = ''
+  try {
+    await apiFetch(`/api/user/${person.id}/invite/resend`, { method: 'POST' })
+    message.value = `Einladung erneut gesendet an ${person.company_email}.`
+    await loadUsers()
+  } catch (e) {
+    error.value = e.message
+  }
 }
 
 async function saveApprenticeProfile() {
@@ -346,6 +361,21 @@ function formatDate(d) {
             <span v-else class="badge badge-info">
               {{ supervisorsForStudent(person.id).length }} Ausbildner
             </span>
+            <span
+              v-if="person.password_pending"
+              class="badge badge-warning"
+              title="Die Person hat den Einladungslink noch nicht verwendet"
+            >
+              Passwort ausstehend
+            </span>
+            <button
+              v-if="person.password_pending"
+              type="button"
+              class="btn btn-sm"
+              @click="resendInvite(person)"
+            >
+              Einladung erneut senden
+            </button>
             <EditButton
               v-if="person.can_edit_contacts"
               label="Kontaktdaten / Stammdaten bearbeiten"
@@ -789,15 +819,11 @@ function formatDate(d) {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Initialpasswort *</label>
-          <input
-            v-model="newPassword"
-            type="password"
-            class="form-control"
-            minlength="8"
-            autocomplete="new-password"
-            required
-          />
+          <div class="alert alert-info" style="margin-bottom: 0">
+            Die Person erhält automatisch eine Einladungs-E-Mail an Ihre
+            Firmen-E-Mail-Adresse und setzt das Passwort selbst über den
+            Link darin.
+          </div>
         </div>
 
         <div class="flex-between">

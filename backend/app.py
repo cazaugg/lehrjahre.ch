@@ -11,6 +11,7 @@ from backend.auth import verify_csrf
 from backend.validation import ValidationError
 from backend.routes.auth_routes import bp as auth_bp
 from backend.routes.user_routes import bp as user_bp
+from backend.routes.company_signup_routes import bp as company_signup_bp
 from backend.routes.project_routes import bp as project_bp
 from backend.routes.implementation_routes import bp as implementation_bp
 from backend.routes.evaluation_routes import bp as evaluation_bp
@@ -100,6 +101,7 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     # Register API blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(user_bp)
+    app.register_blueprint(company_signup_bp)
     app.register_blueprint(project_bp)
     app.register_blueprint(implementation_bp)
     app.register_blueprint(evaluation_bp)
@@ -165,10 +167,15 @@ def create_app(config_overrides: dict | None = None) -> Flask:
     with app.app_context():
         # Create the control schema (company registry + user routing index).
         # Company databases are provisioned on demand by tenants.create_company_schema.
-        from backend.models import Company, UserRouting
+        from backend.models import Company, UserRouting, CompanySignup
 
         db.metadata.create_all(
-            bind=db.engine, tables=[Company.__table__, UserRouting.__table__]
+            bind=db.engine,
+            tables=[
+                Company.__table__,
+                UserRouting.__table__,
+                CompanySignup.__table__,
+            ],
         )
 
         database_uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
