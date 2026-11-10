@@ -50,3 +50,17 @@ class SlidingWindowLimiter:
 
 login_ip_limiter = SlidingWindowLimiter(limit=30, window_seconds=5 * 60)
 login_email_limiter = SlidingWindowLimiter(limit=10, window_seconds=5 * 60)
+
+# First-login invitations (mailed after user creation by admins):
+invite_ip_limiter = SlidingWindowLimiter(limit=30, window_seconds=5 * 60)
+invite_token_limiter = SlidingWindowLimiter(limit=10, window_seconds=60 * 60)
+
+# Company signup flow:
+# - submitting the form: few per IP per hour (mail flooding protection)
+# - resend: small per e-mail quota on top of the IP limiter
+# - verification: attempts are cheap but limited per IP and per token
+signup_ip_limiter = SlidingWindowLimiter(limit=5, window_seconds=60 * 60)
+signup_resend_ip_limiter = SlidingWindowLimiter(limit=10, window_seconds=60 * 60)
+signup_resend_limiter = SlidingWindowLimiter(limit=3, window_seconds=60 * 60)
+verify_ip_limiter = SlidingWindowLimiter(limit=30, window_seconds=5 * 60)
+verify_token_limiter = SlidingWindowLimiter(limit=10, window_seconds=60 * 60)

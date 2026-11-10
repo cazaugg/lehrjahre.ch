@@ -50,8 +50,12 @@ def ensure_csrf_token() -> str:
 def verify_csrf():
     if request.method in SAFE_METHODS:
         return None
-    # Login creates a fresh session, exempt from pre-existing CSRF requirement
-    if request.endpoint == "api_auth.login":
+    # Login and the company-signup flow create/complete fresh unauthenticated
+    # sessions and are exempt; abuse is mitigated by dedicated rate limiters.
+    # Same for the first-login invitation endpoint (token = capability).
+    if request.endpoint == "api_auth.login" or (
+        request.endpoint and request.endpoint.startswith("api_company_signup.")
+    ) or request.endpoint == "api_user.invite_accept":
         return None
     expected = session.get("csrf_token")
     provided = request.headers.get("X-CSRF-Token")

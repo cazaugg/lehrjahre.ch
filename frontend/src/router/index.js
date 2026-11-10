@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import LoginView from '../views/LoginView.vue'
+import RegistrierenView from '../views/RegistrierenView.vue'
+import RegistrierungBestaetigenView from '../views/RegistrierungBestaetigenView.vue'
+import EinladungView from '../views/EinladungView.vue'
 import ProjekteView from '../views/ProjekteView.vue'
 import ProjektDetailView from '../views/ProjektDetailView.vue'
 import ProjektPlanungView from '../views/ProjektPlanungView.vue'
@@ -15,6 +18,14 @@ import AccountView from '../views/AccountView.vue'
 const routes = [
   { path: '/', redirect: '/projekte' },
   { path: '/login', name: 'login', component: LoginView, meta: { public: true } },
+  { path: '/registrierung', name: 'registrierung', component: RegistrierenView, meta: { public: true } },
+  {
+    path: '/registrierung/bestaetigen',
+    name: 'registrierung-bestaetigen',
+    component: RegistrierungBestaetigenView,
+    meta: { public: true }
+  },
+  { path: '/einladung', name: 'einladung', component: EinladungView, meta: { public: true } },
   { path: '/projekte', name: 'projekte', component: ProjekteView },
   {
     path: '/projekte/neu/planung',

@@ -1,5 +1,7 @@
+import hashlib
 import json
 import re
+import secrets
 from datetime import date, datetime, timezone
 import sqlite3
 
@@ -101,6 +103,27 @@ def email_domain(email: str) -> str | None:
     return domain
 
 
+# Public/free-mail providers may never become a company's email domain:
+# the claim is unprovable (anyone can create such a mailbox) and all future
+# users of the company would need an address on that third-party domain.
+PUBLIC_EMAIL_DOMAINS = frozenset(
+    {
+        "aol.com", "bluewin.ch", "freenet.de", "gmail.com", "googlemail.com",
+        "gmx.at", "gmx.ch", "gmx.de", "gmx.net", "hotmail.at", "hotmail.ch",
+        "hotmail.com", "hotmail.de", "icloud.com", "live.at", "live.ch",
+        "live.com", "live.de", "mail.com", "me.com", "msn.com", "orange.fr",
+        "outlook.at", "outlook.ch", "outlook.com", "outlook.de", "pm.me",
+        "proton.me", "protonmail.ch", "protonmail.com", "sunrise.ch",
+        "t-online.de", "web.de", "yahoo.ch", "yahoo.co.uk", "yahoo.com",
+        "yahoo.de", "yahoo.fr", "yandex.com", "yandex.ru",
+    }
+)
+
+
+def is_public_email_domain(domain: str) -> bool:
+    return (domain or "").strip().lower().lstrip("@") in PUBLIC_EMAIL_DOMAINS
+
+
 def semester_for_date(exam_date, start_date, end_date):
     """Return the 1-based semester of an exam, counted forward to end_date."""
     if not exam_date or not start_date or not end_date or start_date >= end_date:
@@ -188,6 +211,66 @@ class UserRouting(db.Model):
     school_email = db.Column(db.String(150), default="", nullable=False)
 
 
+def _utcnow_naive() -> datetime:
+    """SQLite stores DateTime columns without a timezone; keep everything
+    in UTC-naive representation so comparisons stay consistent."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class CompanySignup(db.Model):
+    """Control-database row: a pending (or completed) self-service company
+    registration.
+
+    The company and its admin account are only created once the signup
+    e-mail was confirmed via a one-time verification link. Only the hashed
+    token is stored (the raw token lives exclusively in the mail); the
+    password is stored hashed (Argon2id) and reused for the admin account
+    that is created upon verification.
+    """
+
+    __tablename__ = "company_signup"
+
+    STATUS_PENDING = "pending"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    surname = db.Column(db.String(120), nullable=False)
+    job_title = db.Column(db.String(150), nullable=False)
+    # The signup e-mail doubles as the company's email domain claim.
+    email = db.Column(db.String(150), unique=True, nullable=False)
+    email_domain = db.Column(db.String(150), nullable=False)
+    company_name = db.Column(db.String(150), nullable=False)
+    address = db.Column(db.String(255), default="")
+    password_hash = db.Column(db.String(255), nullable=False)
+    # SHA-256 hex digest of the one-time verification token; the raw token
+    # is never persisted.
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    resend_count = db.Column(db.Integer, nullable=False, default=0)
+    last_sent_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: _utcnow_naive(),
+        nullable=False,
+    )
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    def is_expired(self) -> bool:
+        return _utcnow_naive() >= self.expires_at
+
+
+def company_signup_apply_token(signup: CompanySignup, expires_at) -> str:
+    """Bind a fresh one-time token to the signup; returns the raw token."""
+    token = secrets.token_urlsafe(32)
+    signup.token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    signup.expires_at = expires_at
+    return token
+
+
+
 class User(db.Model):
     """Full user record. Rows of this table live in the company's own
     database (one company per database); `company_id` mirrors the control-DB
@@ -226,6 +309,11 @@ class User(db.Model):
     picture_document = db.Column(
         db.Integer, db.ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
     )
+
+    # Pending first-login invitation (e-mailed link); NULL once the user
+    # has set their own password via the link.
+    invite_token_hash = db.Column(db.String(64), nullable=True)
+    invite_expires_at = db.Column(db.DateTime, nullable=True)
 
     def to_dict(self):
         # All rows of this table belong to the active company database; the
@@ -666,6 +754,26 @@ class Knowledge(db.Model):
         }
 
 
+def user_apply_invite(user: User, expires_at) -> str:
+    """Bind a fresh one-time invitation token to a user; returns the raw
+    token (its SHA-256 hash is stored on the tenant user row)."""
+    token = secrets.token_urlsafe(32)
+    user.invite_token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    user.invite_expires_at = expires_at
+    return token
+
+
+def user_clear_invite(user: User) -> None:
+    user.invite_token_hash = None
+    user.invite_expires_at = None
+
+
+# Unusable stand-in hash for invited (not yet activated) users: variants of
+# argon2 keep the login timing identical to real accounts while making any
+# password fail.
+INVITED_PASSWORD_HASH = "argon2id$v=19$m=65536,t=3,p=4$invited$"
+
+
 def _table_columns(cursor, table: str) -> set[str]:
     cursor.execute(f"PRAGMA table_info({table})")
     return {row[1] for row in cursor.fetchall()}
@@ -693,6 +801,8 @@ def ensure_tenant_columns(engine: Engine) -> None:
     """
     migrations = [
         ("user", "session_version", "INTEGER NOT NULL DEFAULT 0"),
+        ("user", "invite_token_hash", "VARCHAR(64)"),
+        ("user", "invite_expires_at", "DATETIME"),
         ("project", "document_id", "INTEGER REFERENCES documents(id) ON DELETE SET NULL"),
         ("project", "assigned_students", "TEXT DEFAULT '[]'"),
         ("project", "is_published", "BOOLEAN NOT NULL DEFAULT 0"),

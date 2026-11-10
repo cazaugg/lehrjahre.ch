@@ -108,6 +108,10 @@ def client():
             "SESSION_COOKIE_SECURE": False,
             "IS_DEV": True,
             "DEBUG": False,
+            # Isolate mail handling from the developer's .env: no SMTP host,
+            # outgoing mail is captured in the dev outbox.
+            "SMTP_HOST": "",
+            "MAIL_DEV_OUTBOX": os.path.join(tmp_dir, "outbox.log"),
         }
     )
 
@@ -912,7 +916,6 @@ def test_company_membership_and_email_domain(client):
             "company_email": email,
             "job_title": "Polymechanikerin / Polymechaniker EFZ",
             "supervisor_id": trainer["id"],
-            "password": "Passwort123!",
             **extra,
         }
         return client.post(
@@ -2995,7 +2998,9 @@ def test_login_rate_limit(client):
     assert "Retry-After" in res.headers
 
 
-def test_create_user_requires_password(client):
+def test_create_user_with_password_field_is_rejected(client):
+    """Accounts have no initial password: the person sets it themselves
+    via the invitation link."""
     csrf, _ = login(client, "admin@vektorwerk.ch")
     res = client.post(
         "/api/user",
@@ -3005,11 +3010,12 @@ def test_create_user_requires_password(client):
             "surname": "Muster",
             "company_email": "max.muster@vektorwerk.ch",
             "job_title": "Polymechanikerin / Polymechaniker EFZ",
+            "password": "Passwort123!",
         },
         headers={"X-CSRF-Token": csrf},
     )
     assert res.status_code == 400
-    assert "Passwort" in res.get_json()["error"]
+    assert "Einladungs-E-Mail" in res.get_json()["error"]
 
 
 def test_user_and_relation_management_is_admin_only(client):
@@ -3024,7 +3030,6 @@ def test_user_and_relation_management_is_admin_only(client):
             "surname": "Muster",
             "company_email": "max.muster@vektorwerk.ch",
             "job_title": "Polymechanikerin / Polymechaniker EFZ",
-            "password": "Passwort123!",
         },
         headers={"X-CSRF-Token": csrf_t1},
     )
@@ -3057,7 +3062,6 @@ def test_user_and_relation_management_is_admin_only(client):
             "surname": "Muster",
             "company_email": "max.muster@vektorwerk.ch",
             "job_title": "Polymechanikerin / Polymechaniker EFZ",
-            "password": "Passwort123!",
         },
         headers={"X-CSRF-Token": csrf_admin},
     )
@@ -3459,3 +3463,550 @@ def test_spa_missing_dist_returns_404(client):
 
     assert client.get("/dashboard").status_code == 404
     assert client.get("/").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Company self-service signup (verify-by-mail flow)
+# ---------------------------------------------------------------------------
+
+import email as email_module
+import re as signup_re
+from email import policy as email_policy
+from datetime import datetime, timedelta, timezone as dt_timezone
+
+import backend.ratelimit as _ratelimit
+from backend.models import CompanySignup
+
+
+SIGNUP_PAYLOAD = {
+    "name": "Nadia",
+    "surname": "Roth",
+    "job_title": "Administrator",
+    "email": "nadia.roth@roth-mechanik.ch",
+    "company_name": "Roth Mechanik AG",
+    "address": "Bergstrasse 3",
+    "password": "SicheresPasswort1!",
+}
+
+
+def _signup_payload(**overrides):
+    payload = dict(SIGNUP_PAYLOAD)
+    payload.update(overrides)
+    return payload
+
+
+def _reset_signup_limiters():
+    """Signup limiters are process-global; give each test a clean slate."""
+    for attribute in dir(_ratelimit):
+        limiter = getattr(_ratelimit, attribute)
+        if isinstance(limiter, _ratelimit.SlidingWindowLimiter):
+            limiter._events.clear()
+
+
+def _outbox_messages(client):
+    path = client.application.config["MAIL_DEV_OUTBOX"]
+    if not os.path.exists(path):
+        return []
+    raw = open(path, "rb").read()
+    messages = []
+    for chunk in raw.split(b"===== MAIL =====\n"):
+        if not chunk.strip():
+            continue
+        messages.append(
+            email_module.message_from_bytes(chunk, policy=email_policy.default)
+        )
+    return messages
+
+
+def _outbox_count(client):
+    return len(_outbox_messages(client))
+
+
+def _outbox_tokens(client):
+    tokens = []
+    for message in _outbox_messages(client):
+        body = message.get_body(preferencelist=("plain",)).get_content()
+        match = signup_re.search(r"\?token=([A-Za-z0-9_-]+)", body)
+        if match:
+            tokens.append(match.group(1))
+    return tokens
+
+
+@pytest.fixture(autouse=True)
+def _clean_signup_limiters():
+    _reset_signup_limiters()
+    yield
+    _reset_signup_limiters()
+
+
+def _pending_signup(client):
+    app = client.application
+    with app.app_context():
+        return db.session.query(CompanySignup).one()
+
+
+def test_company_signup_full_flow_creates_company_and_admin(client):
+    """Submit -> mail link -> verify -> company + admin account + session."""
+    # No CSRF header anywhere: the signup endpoints are unauthenticated.
+    res = client.post("/api/company-signup", json=_signup_payload())
+    assert res.status_code == 200
+    # Generic message: it cannot reveal whether the e-mail was accepted.
+    assert "E-Mail" in res.get_json()["data"]["message"]
+
+    # Nothing is provisioned before verification.
+    with client.application.app_context():
+        assert (
+            Company.query.filter_by(email_domain="roth-mechanik.ch").first()
+            is None
+        )
+
+    messages = _outbox_messages(client)
+    assert len(messages) == 1
+    assert messages[0]["From"] == '"lehrjahre.ch" <kontakt@lehrjahre.ch>'
+    assert messages[0]["To"] == "nadia.roth@roth-mechanik.ch"
+    token = _outbox_tokens(client)[0]
+
+    res = client.post("/api/company-signup/verify", json={"token": token})
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["user"]["role"] == "admin"
+    assert data["user"]["company"] == "Roth Mechanik AG"
+    assert data["user"]["company_email"] == "nadia.roth@roth-mechanik.ch"
+
+    # The verification established the session (same envelope as login).
+    res = client.get("/api/auth/me")
+    assert res.status_code == 200
+    me = res.get_json()["data"]["user"]
+    assert me["company_domain"] == "roth-mechanik.ch"
+    assert me["role"] == "admin"
+
+    # Registry row + tenant folder + tenant DB + routing exist.
+    with client.application.app_context():
+        company = Company.query.filter_by(email_domain="roth-mechanik.ch").one()
+        assert os.path.isfile(tenants.tenant_db_path(company))
+        assert (
+            UserRouting.query.filter_by(company_id=company.id).one().company_email
+            == "nadia.roth@roth-mechanik.ch"
+        )
+
+    # Password carried over from the signup: normal login works.
+    csrf_token, _user = login(
+        client, "nadia.roth@roth-mechanik.ch", "SicheresPasswort1!"
+    )
+    assert csrf_token  # CSRF token issued on login
+
+
+def test_company_signup_duplicate_email_is_generic_and_mails_nothing(client):
+    res = client.post("/api/company-signup", json=_signup_payload())
+    assert res.status_code == 200
+    assert len(_outbox_messages(client)) == 1
+
+    # Same address again: generic 200, no second mail, no error leaks.
+    res = client.post("/api/company-signup", json=_signup_payload())
+    assert res.status_code == 200
+    assert "E-Mail" in res.get_json()["data"]["message"]
+    assert len(_outbox_messages(client)) == 1
+
+    # An address already used by an existing user behaves identically
+    # (trainer1's private address; its domain is not claimed by any company).
+    res = client.post(
+        "/api/company-signup",
+        json=_signup_payload(
+            email="trainer1@privat.ch",
+            company_name="Andere GmbH",
+        ),
+    )
+    assert res.status_code == 200
+    assert len(_outbox_messages(client)) == 1
+    with client.application.app_context():
+        emails = {s.email for s in CompanySignup.query.all()}
+    assert "trainer1@privat.ch" not in emails
+
+
+def test_company_signup_rejects_public_email_domain(client):
+    _reset_signup_limiters()
+    res = client.post(
+        "/api/company-signup",
+        json=_signup_payload(email="some.person@gmail.com", company_name="Nope GmbH"),
+    )
+    assert res.status_code == 400
+    assert "@gmail.com" in res.get_json()["error"]
+
+
+def test_company_signup_rejects_taken_domain_and_existing_name(client):
+    res = client.post(
+        "/api/company-signup",
+        json=_signup_payload(email="erika.muster@vektorwerk.ch"),
+    )
+    assert res.status_code == 400
+    assert "bereits einer Firma zugeordnet" in res.get_json()["error"]
+
+    res = client.post(
+        "/api/company-signup",
+        json=_signup_payload(company_name="vektorwerk technik ag"),
+    )
+    assert res.status_code == 400
+    assert "existiert bereits" in res.get_json()["error"]
+
+
+def test_company_signup_validation_errors(client):
+    weak = _signup_payload(password="kurz")
+    res = client.post("/api/company-signup", json=weak)
+    assert res.status_code == 400
+    assert "mindestens 8 Zeichen" in res.get_json()["error"]
+
+    missing = {key: value for key, value in _signup_payload().items() if key != "surname"}
+    res = client.post("/api/company-signup", json=missing)
+    assert res.status_code == 400
+    assert "Pflichtfelder" in res.get_json()["error"]
+
+    res = client.post("/api/company-signup", json=_signup_payload(email="keine-mail"))
+    assert res.status_code == 400
+    assert "Ungültige E-Mail-Adresse" in res.get_json()["error"]
+
+
+def test_signup_disabled_returns_403(client):
+    client.application.config["SIGNUP_ENABLED"] = False
+    try:
+        res = client.post("/api/company-signup", json=_signup_payload())
+        assert res.status_code == 403
+        res = client.post(
+            "/api/company-signup/verify", json={"token": "irgendein-token"}
+        )
+        assert res.status_code == 403
+    finally:
+        client.application.config["SIGNUP_ENABLED"] = True
+
+
+def test_company_signup_rate_limits_submit(client):
+    _reset_signup_limiters()
+    # Limit is 5 per hour per IP: the sixth accepted-for-validation request
+    # gets a 429 (each accepted submission consumes one slot).
+    for index in range(5):
+        res = client.post(
+            "/api/company-signup",
+            json=_signup_payload(
+                email=f"firma{index}@roth-mechanik.ch",
+                company_name=f"Roth Mechanik {index} AG",
+            ),
+        )
+        assert res.status_code == 200
+    res = client.post(
+        "/api/company-signup",
+        json=_signup_payload(
+            email="vierte@roth-mechanik.ch",
+            company_name="Vierte AG",
+        ),
+    )
+    assert res.status_code == 429
+    assert "Retry-After" in res.headers
+
+
+def test_company_signup_token_expiry_and_resend(client):
+    res = client.post("/api/company-signup", json=_signup_payload())
+    assert res.status_code == 200
+    old_token = _outbox_tokens(client)[0]
+
+    signup = _pending_signup(client)
+    with client.application.app_context():
+        row = db.session.get(CompanySignup, signup.id)
+        row.expires_at = (
+            datetime.now(dt_timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
+        )
+        db.session.commit()
+
+    res = client.post("/api/company-signup/verify", json={"token": old_token})
+    assert res.status_code == 400
+    assert "abgelaufen" in res.get_json()["error"]
+
+    # Resend refreshes validity and invalidates the old link.
+    res = client.post(
+        "/api/company-signup/resend", json={"email": SIGNUP_PAYLOAD["email"]}
+    )
+    assert res.status_code == 200
+    new_token = _outbox_tokens(client)[-1]
+    assert new_token != old_token
+
+    res = client.post("/api/company-signup/verify", json={"token": old_token})
+    assert res.status_code == 400
+    res = client.post("/api/company-signup/verify", json={"token": new_token})
+    assert res.status_code == 200
+    assert res.get_json()["data"]["user"]["role"] == "admin"
+
+
+def test_company_signup_token_single_use_and_garbage(client):
+    res = client.post("/api/company-signup", json=_signup_payload())
+    assert res.status_code == 200
+    token = _outbox_tokens(client)[0]
+
+    res = client.post("/api/company-signup/verify", json={"token": token})
+    assert res.status_code == 200
+
+    res = client.post("/api/company-signup/verify", json={"token": token})
+    assert res.status_code == 400
+    assert "bereits verwendet" in res.get_json()["error"]
+
+    res = client.post("/api/company-signup/verify", json={"token": "BABABABABA"})
+    assert res.status_code == 400
+
+    res = client.post("/api/company-signup/verify", json={})
+    assert res.status_code == 400
+
+
+def test_company_signup_resend_unknown_email_is_generic(client):
+    mails_before = _outbox_count(client)
+    res = client.post(
+        "/api/company-signup/resend", json={"email": "unbekannt@roth-mechanik.ch"}
+    )
+    assert res.status_code == 200
+    assert "Postfach" in res.get_json()["data"]["message"]
+    assert _outbox_count(client) == mails_before
+
+
+def test_company_signup_domain_check(client):
+    res = client.get("/api/company-signup/domain-check?domain=vektorwerk.ch")
+    assert res.get_json()["data"]["available"] is False
+
+    res = client.get("/api/company-signup/domain-check?domain=nagelneu-firma.ch")
+    assert res.get_json()["data"]["available"] is True
+
+    res = client.get("/api/company-signup/domain-check?domain=gmail.com")
+    assert res.get_json()["data"]["available"] is False
+
+    res = client.get("/api/company-signup/domain-check?domain=nicht/domain")
+    assert res.get_json()["data"]["valid"] is False
+
+
+def test_load_dotenv(tmp_path, monkeypatch):
+    """The backend config loads `.env` (dev convenience) without ever
+    overriding variables that are already present in the environment."""
+    from backend import config
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# comment line\n"
+        "LEHRJAHRE_TEST_PLAIN=wert\n"
+        'LEHRJAHRE_TEST_QUOTED="quoted wert"\n'
+        "export LEHRJAHRE_TEST_EXPORTED=exportiert\n"
+        "LEHRJAHRE_TEST_PRESET=aus-datei\n"
+        "kein-key-ohne-gleichzeile\n"
+        "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LEHRJAHRE_TEST_PRESET", "preset-value")
+    keys = [
+        "LEHRJAHRE_TEST_PLAIN",
+        "LEHRJAHRE_TEST_QUOTED",
+        "LEHRJAHRE_TEST_EXPORTED",
+        "LEHRJAHRE_TEST_PRESET",
+    ]
+    try:
+        config._load_dotenv(str(env_file))
+        assert os.environ["LEHRJAHRE_TEST_PLAIN"] == "wert"
+        assert os.environ["LEHRJAHRE_TEST_QUOTED"] == "quoted wert"
+        assert os.environ["LEHRJAHRE_TEST_EXPORTED"] == "exportiert"
+        # Pre-set environment variables are never overridden.
+        assert os.environ["LEHRJAHRE_TEST_PRESET"] == "preset-value"
+    finally:
+        for key in keys:
+            os.environ.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# First-login invitations (invite mails always go to company emails)
+# ---------------------------------------------------------------------------
+
+INVITE_PAYLOAD = {
+    "role": "lernender",
+    "name": "Max",
+    "surname": "Muster",
+    "company_email": "max.muster@vektorwerk.ch",
+    "job_title": "Polymechanikerin / Polymechaniker EFZ",
+    "private_email": "max.muster@privat-chaos.example",
+}
+
+
+def _invite_from_outbox(client, index=0):
+    """Return (token, company_id) from the n-th invite mail."""
+    message = _outbox_messages(client)[index]
+    body = message.get_body(preferencelist=("plain",)).get_content()
+    token = signup_re.search(r"\?token=([A-Za-z0-9_-]+)", body).group(1)
+    company_id = signup_re.search(r"&c=(\d+)", body).group(1)
+    return message, token, company_id
+
+
+def _create_invited_user(client, **overrides):
+    csrf, _admin = login(client, "admin@vektorwerk.ch")
+    payload = dict(INVITE_PAYLOAD)
+    payload.update(overrides)
+    res = client.post("/api/user", json=payload, headers={"X-CSRF-Token": csrf})
+    assert res.status_code == 201, res.get_json()
+    return res.get_json()["data"], csrf
+
+
+def test_user_invite_flow_sets_own_password_and_logs_in(client):
+    created, _csrf = _create_invited_user(client)
+    assert created["password_pending"] is True
+
+    # The invitation goes to the company address, never to private ones.
+    message, token, company_id = _invite_from_outbox(client)
+    assert message["To"] == "max.muster@vektorwerk.ch"
+
+    # No usable password yet: login is a generic 401 like any wrong one.
+    res = client.post(
+        "/api/auth/login",
+        json={"email": INVITE_PAYLOAD["company_email"], "password": "Beliebig123!"},
+    )
+    assert res.status_code == 401
+
+    # Garbage token is a 400 (and the endpoint needs no CSRF header).
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": "NICHT-GUELTIG", "company_id": company_id,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 400
+    assert "ungültig" in res.get_json()["error"]
+
+    # Accepting works without a CSRF token (token = capability).
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": token, "company_id": company_id,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["user"]["company"] == "Vektorwerk Technik AG"
+
+    # A session was established by the accept call.
+    res = client.get("/api/auth/me")
+    assert res.get_json()["data"]["user"]["company_email"] == (
+        INVITE_PAYLOAD["company_email"]
+    )
+
+    # Single use: the token is dead afterwards.
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": token, "company_id": company_id,
+              "password": "AndersPassw0rt!"},
+    )
+    assert res.status_code == 400
+    assert "bereits verwendet" in res.get_json()["error"]
+
+    # The chosen password works on the normal login page.
+    csrf, invited_user = login(
+        client, INVITE_PAYLOAD["company_email"], "NeuesPasswort1!"
+    )
+    assert invited_user["role"] == "lernender"
+
+    # And the admin sees the invitation as consumed.
+    _, admin_user = login(client, "admin@vektorwerk.ch")
+    res = client.get(f"/api/user/{invited_user['id']}")
+    assert res.get_json()["data"]["password_pending"] is False
+
+
+def test_user_invite_expired_then_admin_resend(client):
+    created, _csrf = _create_invited_user(client)
+    _message, old_token, company_id = _invite_from_outbox(client)
+
+    # Force the invite into the past.
+    with company_context(client) as company:
+        target = db.session.get(User, created["id"])
+        target.invite_expires_at = (
+            datetime.now(dt_timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
+        )
+        db.session.commit()
+
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": old_token, "company_id": company_id,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 400
+    assert "abgelaufen" in res.get_json()["error"]
+
+    _csrf_admin, _admin = login(client, "admin@vektorwerk.ch")
+    res = client.post(
+        f"/api/user/{created['id']}/invite/resend",
+        headers={"X-CSRF-Token": _csrf_admin},
+    )
+    assert res.status_code == 200
+    assert res.get_json()["data"]["password_pending"] is True
+
+    message, new_token, company_id2 = _invite_from_outbox(client, index=1)
+    assert new_token != old_token
+
+    # Old link is dead, the re-sent one works.
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": old_token, "company_id": company_id2,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 400
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": new_token, "company_id": company_id2,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 200
+
+
+def test_user_invite_resend_is_admin_only_and_unusable_after_password(client):
+    created, _csrf = _create_invited_user(client)
+    _message, token, company_id = _invite_from_outbox(client)
+
+    # Supervisors cannot re-send invitations.
+    csrf_trainer, _ = login(client, "trainer@vektorwerk.ch")
+    res = client.post(
+        f"/api/user/{created['id']}/invite/resend",
+        headers={"X-CSRF-Token": csrf_trainer},
+    )
+    assert res.status_code == 403
+
+    # After the invitation was honoured, resend is refused (and the
+    # password-change endpoint kills any outstanding invite anyway).
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": token, "company_id": company_id,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 200
+
+    csrf_admin, _ = login(client, "admin@vektorwerk.ch")
+    res = client.post(
+        f"/api/user/{created['id']}/invite/resend",
+        headers={"X-CSRF-Token": csrf_admin},
+    )
+    assert res.status_code == 400
+    assert "bereits ein Passwort" in res.get_json()["error"]
+
+
+def test_user_invite_accept_validates_password(client):
+    created, _csrf = _create_invited_user(client)
+    _message, token, company_id = _invite_from_outbox(client)
+
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": token, "company_id": company_id, "password": "kurz"},
+    )
+    assert res.status_code == 400
+    assert "mindestens 8 Zeichen" in res.get_json()["error"]
+
+    # The invite was not consumed by the failed attempts.
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": token, "company_id": company_id,
+              "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 200
+
+
+def test_user_invite_accept_without_company_id_rejected(client):
+    created, _csrf = _create_invited_user(client)
+    _message, token, _company_id = _invite_from_outbox(client)
+
+    res = client.post(
+        "/api/user/invite/accept",
+        json={"token": token, "password": "NeuesPasswort1!"},
+    )
+    assert res.status_code == 400
