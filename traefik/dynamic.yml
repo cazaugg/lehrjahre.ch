@@ -1,0 +1,15 @@
+# Traefik dynamic configuration (file provider).
+#
+# TLS uses a Cloudflare Origin Certificate: Cloudflare terminates visitor TLS
+# at its edge and re-encrypts to this origin with the certificate below.
+# Create it under SSL/TLS -> Origin Server in the Cloudflare dashboard and
+# install both files next to this directory (see README, "Cloudflare").
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/lehrjahre.pem
+      keyFile: /etc/traefik/certs/lehrjahre.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/lehrjahre.pem
+        keyFile: /etc/traefik/certs/lehrjahre.key

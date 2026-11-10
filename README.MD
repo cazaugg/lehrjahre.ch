@@ -19,7 +19,7 @@ Requires [uv](https://docs.astral.sh/uv/), Node.js >= 26 with npm, and Python >=
 
 ### 1. Production Deployment
 
-Flask serves both the API and the built frontend. The Docker stack (Traefik edge proxy, Gunicorn application container) routes `Host(domain)` to the API container; non-`/api` paths fall back to `index.html` for client-side routes (see `serve_frontend` in `backend/app.py`).
+Flask serves both the API and the built frontend. The Docker stack (Traefik edge proxy, Gunicorn application container) routes `Host(domain)` to the API container; non-`/api` paths fall back to `index.html` for client-side routes (see `serve_frontend` in `backend/app.py`). Cloudflare fronts the origin as the public edge (DNS, WAF, TLS) — see [Cloudflare](#1a-cloudflare-waf--dns--tls).
 
 ```bash
 # Get the repo
@@ -30,17 +30,21 @@ cd lehrjahre.ch
 # Create required folders
 sudo install -d -m 0755 /data/lehrjahre.ch
 sudo install -d -o 10001 -g 10001 -m 0750 /data/lehrjahre.ch/app   # API user (10001) owns its data
-sudo install -d -o 0 -g 0 -m 0700 /data/lehrjahre.ch/traefik       # Let's Encrypt account data
+# TLS material is system config, not application data (see "1a. Cloudflare"):
+#   /etc/ssl/lehrjahre.pem + /etc/ssl/lehrjahre.key (key chmod 600, root only).
 
 # Configuration (see .env.example):
-#   DOMAIN, ACME_EMAIL, SECRET_KEY via openssl rand -hex 32, and the
+#   DOMAIN, SECRET_KEY via openssl rand -hex 32, and the
 #   outgoing-mail settings (mails are sent from MAIL_FROM, by default
 #   kontakt@lehrjahre.ch, via an SMTP account):
 #     SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD
 cp .env.example .env && chmod 600 .env
 $EDITOR .env
 
-docker compose up -d --build
+# Build & start. The build stamps the image with the semver from the
+# VERSION file and the current git commit (shown in the UI and exposed
+# via /api/health):
+GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
 
 Companies can register themselves via `/registrierung` (public form with e-mail verification; the signup e-mail's domain becomes the company's `email_domain`). Companies that should *not* have a public signup path are created with the CLI instead, which replaces the folder/`app.db` provisioning of the form flow:
@@ -54,7 +58,7 @@ docker compose exec api python -m backend.companies add "Firma AG" "firma.ch" --
 - Set `LEHRJAHRE_ENV=production` (the default) and a strong, random `SECRET_KEY` of at least 32 characters. The app refuses to start without a secret outside development.
 - Set `LEHRJAHRE_DEBUG=0` (the default) and run the API with a production WSGI server, not `python -m backend.app`. Debug mode is rejected outside development.
 - Keep `COOKIE_SECURE=true` when the site is served over HTTPS. Set it to `false` only for local HTTP development (`npm run dev` does this automatically).
-- The reverse proxy must strip incoming `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Prefix` headers and set them itself. `ProxyFix` trusts one proxy hop.
+- The reverse proxy must not trust client-supplied `X-Forwarded-*` headers: Traefik accepts them only from Cloudflare's ranges and sets them itself, and `ProxyFix` trusts one proxy hop (the visitor IP Cloudflare passes through).
 - Do not run `backend.seed` in production; demo accounts and the shared demo password are development-only.
 - Keep the company data root (`data/` — containing `control.db` and each company folder with `app.db` + `documents/`) readable only by the API process user (the app creates the folders with `0750` and the databases/files with `0640`, but verify after deployment).
 - Collect the API process logs. Security-relevant audit entries are written at `INFO` level.
@@ -62,6 +66,53 @@ docker compose exec api python -m backend.companies add "Firma AG" "firma.ch" --
 - Egress to the SMTP submission port (default `mail.infomaniak.com:587`) must be allowed if the host firewall restricts container traffic.
 - For mail deliverability, add DNS records for the sending domain (`lehrjahre.ch`): an SPF record authorising the SMTP provider (e.g. `v=spf1 include:spf.infomaniak.ch -all`, adjusted to the actual provider) and preferably a DMARC policy. Without them verification/invite mails may be classified as spam.
 - `SMTP_PASSWORD` is passed as an environment variable: readable by root via `docker inspect` on the API container only. Keep the server access limited (SSH keys, `.env` chmod 600) as documented.
+
+### 1a. Cloudflare (WAF / DNS / TLS)
+
+Cloudflare is the public edge: it terminates visitor TLS, applies the WAF, and re-encrypts to the origin with a **Cloudflare Origin Certificate**. The origin therefore runs no ACME client and needs no inbound Let's Encrypt challenge.
+
+**DNS** — zone `lehrjahre.ch`, all records **proxied** (🟠):
+
+| Type | Name | Content |
+| --- | --- | --- |
+| A | `@` | public IPv4 of the server |
+| AAAA | `@` | public IPv6 of the server |
+
+Add `www` as a redirect (Redirect Rule) or an extra router; the stack routes `Host(DOMAIN)` only.
+
+**TLS** — SSL/TLS → Overview: **Full (strict)**. Then SSL/TLS → Origin Server → *Create Certificate* (`lehrjahre.ch, *.lehrjahre.ch`, 15 years) and install it as host system config (the private key is shown once; keep it out of application-data backups):
+
+```bash
+sudo -e /etc/ssl/lehrjahre.pem   # paste the certificate
+sudo -e /etc/ssl/lehrjahre.key   # paste the private key
+sudo chmod 644 /etc/ssl/lehrjahre.pem && sudo chmod 600 /etc/ssl/lehrjahre.key
+```
+
+`compose.yaml` bind-mounts those two files read-only into the container, and `traefik/dynamic.yml` uses them as the default certificate. Traefik trusts `X-Forwarded-*` only from Cloudflare's ranges and does not append the Cloudflare edge address (`notAppendXForwardedFor`), so `ProxyFix`'s single hop resolves to the visitor IP. Refresh the ranges in `compose.yaml` occasionally from `https://www.cloudflare.com/ips-v4` and `ips-v6`. Rotation requires a Traefik restart (file bind-mounts resolve at container start).
+
+**Origin firewall** — published Docker ports bypass the host `INPUT` chain, and the WAF is only meaningful if the origin is unreachable directly. Restrict forwarded traffic instead (`/etc/nftables.conf`, Cloudflare ranges in `/etc/cf-ips-v4` + `/etc/cf-ips-v6`):
+
+```nft
+table inet filter {
+  chain forward {
+    type filter hook forward priority -150; policy accept;
+    ct state invalid drop
+    ct state established,related accept
+    # Docker-published 80/443: Cloudflare (or a local bridge) only.
+    ip saddr != $cf4 ip saddr != { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } tcp dport { 80, 443 } ct state new drop
+    ip6 saddr != $cf6 ip6 saddr != { fc00::/7, fe80::/10 } tcp dport { 80, 443 } ct state new drop
+  }
+}
+```
+
+A forward chain at priority `-150` runs before Docker's own rules, so it covers container ports regardless of Docker's `DOCKER` chains. `cf4`/`cf6` are set variables built from `/etc/cf-ips-v4` and `/etc/cf-ips-v6` (the `input` chain uses the same sets). Keep SSH (port 22) open in the `input` chain.
+
+Verify:
+
+```bash
+curl -I https://lehrjahre.ch     # expect `server: cloudflare`
+curl -m 5 http://<origin-ip>     # must time out (direct access blocked)
+```
 
 ### 2. Development
 
@@ -125,7 +176,7 @@ uv run pytest backend/test_api.py
 
 ## API Endpoints
 
-- `/api/health` (Service status, incl. `mail_configured`)
+- `/api/health` (Service status, incl. `mail_configured`, `version`, `git_sha`)
 - `/api/auth` (`POST /login`, `POST /logout`, `POST /logout-all`, `GET /me`)
 - `/api/company-signup` (public self-service company registration: `POST` submit, `POST /resend`, `POST /verify` one-time mail token, `GET /domain-check`)
 - `/api/user` (Users & `user_relation` management; first-login invitations: `POST /invite/accept` with the mailed token, `POST /<id>/invite/resend` for admins)
@@ -150,7 +201,8 @@ uv run pytest backend/test_api.py
   - `knowledge` models the `Thema -> Seite` hierarchy (`parent_id`) and links via `document_id` to `documents`.
 - **Company-Scoped File Storage (`<company root>/<company-slug>/documents/`):** Uploaded files (PDFs, images, certificates) and Markdown/text documents (`lernjournal`, `wissen`, `ausbildungsgespraech`, `vertrag`) are stored on disk per company next to its `app.db` and served through `/api/documents/<id>/file` with strict path-traversal protection.
 - **Deployment design:**
-  - **Two containers only (`traefik`, `api`)** — Traefik is the single edge proxy and routes everything to the Flask/Gunicorn container; `ProxyFix` therefore sees exactly one trusted hop and client IPs stay correct.
-  - **Persistent data** is bind-mounted read-write only for the API and lives under `/data/lehrjahre.ch/` (`app/control.db`, `app/<company-slug>/app.db` + `documents/`, `traefik/acme.json`). The static lehrplan JSON is baked into the image instead.
+  - **Two containers only (`traefik`, `api`)** — Traefik is the single reverse proxy and routes everything to the Flask/Gunicorn container; `ProxyFix` therefore sees exactly one trusted hop. Cloudflare sits in front of Traefik and passes the visitor IP in `X-Forwarded-For`.
+  - **Persistent data** is bind-mounted read-write only for the API and lives under `/data/lehrjahre.ch/` (`app/control.db`, `app/<company-slug>/app.db` + `documents/`). The static lehrplan JSON is baked into the image instead. TLS keys are host system config (`/etc/ssl`), never part of this backup tree.
+  - **TLS** is a long-lived Cloudflare Origin Certificate (no ACME); the origin is only reachable through Cloudflare's WAF (host firewall + forwarding rules, see [Cloudflare](#1a-cloudflare-waf--dns--tls)).
   - **Least privilege** — the API container runs as user 10001 with a read-only root filesystem (`tmpfs` for temp uploads); only Traefik publishes 80/443.
   - **Client-side routes without an asset extension** resolve to `index.html`; unknown `/api/*` paths keep returning a JSON 404.

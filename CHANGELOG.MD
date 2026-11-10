@@ -1,47 +1,17 @@
 # Changelog
 
+Notation: new entries go under **Unreleased**; when preparing a release, fold
+them into the next semver version below and bump the `VERSION` file in the
+repository root together with this changelog.
+
 ## Unreleased
 
-- **PDF/Word-Upload:** Ausbildungsgespräche, Lernjournal und Wissenseiten können alternativ zum Markdown-Text direkt als PDF- oder Word-Datei erfasst werden (Upload-Button, Accept-Filter auf `.pdf/.doc/.docx`, Dialog zum Ersetzen beim Bearbeiten). Wissenseiten zeigen Datei-Seiten mit «PDF / Word»-Badge und Download; das Backend (`POST/PUT /api/documents`, `POST/PUT /api/knowledge`) verarbeitet kombinierte Metadaten + Datei-Ersatz via `multipart/form-data` und löscht ersetzte Dateien.
-- **Projektauswertung:** Ausbildner/innen können pro Lernendem eine PDF/Word-Auswertungsdatei beilegen bzw. ersetzen (`Eval.document_id`, neue Endpunkte `POST/GET/DELETE /api/evaluation/<id>/file`, nur `.pdf/.doc/.docx`, max. 20 MB). Dateien folgen der Freigabe-Logik: Lernende sehen den Download erst nach der Freigabe bzw. nach Projektabschluss; die Projekt-Ansicht rendert den Download-Link. Seed-Daten enthalten Beispiele (Auswertungs-PDF, Bildungsbericht-PDF, Wissens-PDF-Seite).
+- Deployment: Traefik serves TLS with a Cloudflare Origin Certificate (no ACME)
+  from `/etc/ssl` (host config, kept out of the `/data` backup tree) and trusts
+  `X-Forwarded-*` only from Cloudflare's ranges, preserving the visitor IP for
+  `ProxyFix` (Traefik bumped to v3.7).
+- Docs: add the Cloudflare WAF / DNS / TLS setup and the origin firewall rules.
 
-- **Deployment:** Added a Docker stack (`compose.yaml` + multi-stage `Dockerfile`): a pinned Traefik v3 edge proxy (Let's Encrypt, 80/443, Docker provider) routes `Host(domain)` to a single Gunicorn container (1 worker / 4 threads). The API container now also serves the built frontend (`frontend/dist`) with an SPA fallback to `index.html`; unknown `/api/*` paths keep returning a JSON 404. Persistent data lives under `/data/lehrjahre.ch/` (`app/control.db`, tenant databases, documents, Traefik ACME); the container runs as non-root user 10001 with a read-only root filesystem, and the static lehrplan JSON is baked into the image.
+## 0.1.0 - First public release (Alpha)
 
-- **Roles:** Added an `admin` role ("Administrator"). Admins manage people and relationships exclusively (create/delete users, edit any contacts/master data in the company, manage all supervisor assignments, and perform any role change — including `confirm_role_elevation`), and can view private contacts of everyone in the company. Supervisors (`ausbildner`) lose these capabilities but keep everything else (including visibility rules and self-editing). Demo seed data includes an admin user (Sandra Meier).
-- **Seed data:** Rebuilt the demo projects around the Konstrukteur/in EFZ Lehrplan: three Konstrukteur students (1st–3rd year, projects in `backend/seed.py` quote Lernziele from `data/lehrplan/lehrplan_KR.json` verbatim in their goals), replacing the previous mixed-job demo data.
-- **Multi-tenancy:** Every company now owns its own SQLite database (`data/<company-slug>/app.db`) containing all its data, including user credentials. A global control database (`data/control.db`) holds only the company registry and the login email → company routing index. Deleted: the old single `data/lehrjahre.db`.
-
-- **Backend:** Added a `company` table and moved users from the free-text `company` column to a mandatory `company_id` foreign key. Company membership cannot be changed through the API.
-- **Backend:** Enforced that a user's `company_email` matches the company's `email_domain`. New users inherit the company address when none is supplied.
-- **Tooling:** Added `backend.companies` CLI (`add`, `list`) for provisioning companies and a startup migration for existing SQLite databases.
-- **Frontend:** Added a domain hint to the create-user form.
-- **Security:** Enforced company isolation for projects, including hiding authorless projects and reassigning projects before user deletion. Evaluations and implementation reports no longer accept foreign-company supervisor or participation references, and profile pictures must be documents owned by the target user.
-- **Security:** Project tree context no longer grants edit/delete rights: supervisors can manage only their own projects and projects of their learners. Learners can submit reports only for projects they directly participate in. Supervisors can now also edit/delete their own certificates.
-- **Frontend:** Added a read-only Word (`.docx`) preview in document views using lazy-loaded `docx-preview`; other binary files keep the existing open/download fallback.
-- **Frontend:** Added a read-only PDF preview using the browser's native PDF viewer, plus a generated 2-page PDF example in the seed data.
-- **Tooling:** Upgraded to Node.js 26 LTS and Python 3.14; refreshed frontend dependencies (Vite 8, Vue Router 5, Pinia 4) and backend dependencies (Flask 3.1, Werkzeug 3.1, argon2-cffi 25, pytest 9).
-- **Tooling:** Switched backend environment and dependency management to uv (`pyproject.toml` + `uv.lock`); removed `backend/requirements.txt`.
-- **Tooling:** Added root `npm run dev` to start Flask and Vite together, with free-port detection and automatic dependency bootstrap.
-- **Frontend:** Added an "Alpha" badge to the login and sidebar branding to mark the build as an early prototype.
-- **Seed data:** Expanded the knowledge base to 4 subjects with 20 pages (Fertigung & Automatisierung, Arbeitssicherheit, Werkstoffkunde, Zeichnen/Messtechnik).
-- **Frontend:** Wissen view now groups pages under their subject instead of listing all entries flat; removed the redundant topic overview block (header already shows title and description).
-- **Frontend:** Replaced the Markdown textarea with `md-editor-v3` (lazy-loaded, German toolbar labels, no external CDN assets). Read-only rendering still uses the existing markdown-it/KaTeX pipeline.
-- **Frontend:** Added a shared `DocumentViewer` for consistent inline document previews and downloads across documents, project submissions and knowledge pages. The document header stays on top and the preview opens below it.
-- **Frontend:** Project participation is now document-based. Students can either write a Markdown document in a full-page editor or upload a file; replaced/removed documents are deleted after saving.
-- **Backend:** Project documents (`type=projekt`) can be created and deleted by their owners and supervising trainers. Documents linked to a released participation are locked until the release is undone.
-- **Lernjournal:** Feedback now records and displays the supervising author. The duplicate “Erstellt von …” line is hidden when it matches the document owner.
-- **Projekte:** Trainer view now lists all assigned learners with a combined submission/evaluation status badge. Expanding a learner shows sections 2 (Durchführung & Abgabe) and 3 (Auswertung & Bewertung) for that learner.
-- **Projekte:** The evaluation view now uses the same expandable learner list. Per-learner evaluation, release and saving happen inside the expanded row; global text and project completion are separate actions.
-- **Lerndokumentation:** Noten & Prüfungen now shows the average per learner between the filter bar and the grade list, respecting the active subject, semester and search filters.
-
-## 0.1.0 - Initial Implementation
-
-- **Backend (Flask & SQLite):**
-  - Implemented SQLite schema (`user`, `user_relation`, `project`, `participation`, `eval`, `grades`, `documents`, `knowledge`).
-  - Added Argon2 password hashing, session authentication, CSRF protection, and reverse proxy (`ProxyFix`) support.
-  - Added company-scoped file and Markdown storage under `/data/documents/<company-slug>/` with path traversal protection.
-  - Implemented REST endpoints `/api/auth`, `/api/user`, `/api/project`, `/api/implementation`, `/api/evaluation`, `/api/documents`, `/api/grades`, and `/api/knowledge`.
-  - Added seed script (`backend/seed.py`) and API test suite (`backend/test_api.py`).
-- **Frontend (Vue 3 & Vite, German UI):**
-  - Created reusable CSS variables/base styles and Vue UI components (`AppLayout`, `StudentSelector`, `DocumentManager`, `MarkdownEditor`, `ModalDialog`).
-  - Built views for `Projekte`, `Lerndokumentation` (`Noten & Prüfungen`, `Zeugnisse`, `Ausbildungsgespräche`, `Kursnachweise`, `Lernjournal`), `Wissen` (`Thema -> Seite`), `Personen` (`Vorgesetzte`, `Lernende / Admin / Vertrag / Bewerbung`), and `Account` (`Kontaktangaben`, `Passwort`, `Foto`).
+- First release

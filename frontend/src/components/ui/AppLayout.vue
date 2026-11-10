@@ -2,6 +2,7 @@
 import { useRouter, useRoute } from 'vue-router'
 import { computed, onMounted, ref } from 'vue'
 import { useAuthStore } from '../../stores/auth'
+import { versionLabel } from '../../version'
 import { fallbackJobs, fetchLehrplanJobs } from '../../utils/lehrplanJobs'
 import BrandLogo from './BrandLogo.vue'
 
@@ -138,6 +139,8 @@ async function handleLogout() {
         </div>
       </nav>
 
+      <span v-if="versionLabel" class="sidebar-version">{{ versionLabel }}</span>
+
       <div v-if="auth.user" class="sidebar-footer">
         <div class="user-summary">
           <div class="user-name">{{ auth.user.full_name }}</div>
@@ -210,6 +213,14 @@ async function handleLogout() {
   font-weight: 700;
   font-size: 1.1rem;
   color: #ffffff;
+}
+
+.sidebar-version {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 0.68rem;
+  color: #64748b;
+  white-space: nowrap;
 }
 
 .brand-sub {

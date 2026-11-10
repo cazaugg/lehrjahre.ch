@@ -14,7 +14,7 @@
 //   --no-install    skip uv sync / npm install
 //   --help, -h      show this help
 
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { get } from 'node:http'
 import { createServer } from 'node:net'
@@ -320,6 +320,19 @@ async function cmdDev() {
     ].join('\n') + '\n',
   )
 
+  // Stamp the dev build like production does (Docker sets these in the
+  // frontend-build stage): semver from VERSION + current git commit.
+  const appVersion = readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim()
+  let gitSha = ''
+  try {
+    gitSha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    }).trim()
+  } catch {
+    // No git available / not a repository: the version label stays reduced.
+  }
+
   backend = spawn(VENV_PY, ['-m', 'backend.app'], {
     cwd: ROOT,
     env: {
@@ -339,7 +352,12 @@ async function cmdDev() {
 
   frontend = spawn(NPM, ['run', 'dev', '--', '--port', String(webPort)], {
     cwd: FRONTEND,
-    env: { ...process.env, LEHRJAHRE_API_PORT: String(apiPort) },
+    env: {
+      ...process.env,
+      LEHRJAHRE_API_PORT: String(apiPort),
+      VITE_APP_VERSION: appVersion,
+      VITE_GIT_SHA: gitSha,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: IS_WIN,
     detached: !IS_WIN,

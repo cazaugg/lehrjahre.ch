@@ -45,6 +45,21 @@ def _load_dotenv(path: str) -> None:
 # production, everything else (dev server, CLI helpers) reads it here.
 _load_dotenv(os.path.join(BASE_DIR, ".env"))
 
+
+def _read_version_file() -> str:
+    """Read the app version from the VERSION file (matches CHANGELOG.MD)."""
+    try:
+        with open(os.path.join(BASE_DIR, "VERSION"), encoding="utf-8") as fh:
+            value = fh.read().strip()
+        return value
+    except OSError:
+        return ""
+
+
+APP_VERSION = _read_version_file()
+# Optional build stamp injected via Docker build args (see compose.yaml).
+GIT_SHA = os.environ.get("LEHRJAHRE_GIT_SHA", "")
+
 # Global control database: company registry + user->company routing index.
 CONTROL_DB_PATH = os.path.join(DATA_DIR, "control.db")
 # Each company owns its own folder: <company root>/<company-slug>/ with a

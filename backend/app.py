@@ -4,7 +4,7 @@ import secrets
 from flask import Flask, abort, jsonify, request, send_from_directory
 from werkzeug.exceptions import NotFound
 from werkzeug.middleware.proxy_fix import ProxyFix
-from backend.config import Config, DATA_DIR, INSECURE_DEFAULT_SECRET
+from backend.config import Config, DATA_DIR, INSECURE_DEFAULT_SECRET, APP_VERSION, GIT_SHA
 from backend.models import db
 from backend import tenants
 from backend.auth import verify_csrf
@@ -24,6 +24,8 @@ from backend.routes.lehrplan_routes import bp as lehrplan_bp
 def create_app(config_overrides: dict | None = None) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config.from_object(Config)
+    app.config["APP_VERSION"] = APP_VERSION
+    app.config["GIT_SHA"] = GIT_SHA
     if config_overrides:
         app.config.update(config_overrides)
 
@@ -175,6 +177,8 @@ def create_app(config_overrides: dict | None = None) -> Flask:
                 "service": "lehrjahre.ch API",
                 "status": "ok",
                 "mail_configured": bool(app.config.get("MAIL_CONFIGURED")),
+                "version": app.config.get("APP_VERSION", ""),
+                "git_sha": app.config.get("GIT_SHA", ""),
             }
         )
 

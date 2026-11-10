@@ -13,7 +13,12 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
-RUN npm run build
+COPY VERSION ./VERSION
+# Stamp the build: semver from the VERSION file + the git sha build arg,
+# exposed to the client bundle via Vite's VITE_* convention.
+ARG GIT_SHA=""
+RUN APP_VERSION=$(cat VERSION) \
+    && VITE_APP_VERSION=$APP_VERSION VITE_GIT_SHA=$GIT_SHA npm run build
 
 # ---------------------------------------------------------------------------
 # Python virtualenv build (build layer only)
@@ -31,9 +36,11 @@ RUN uv sync --frozen --no-dev --no-install-project \
 # Runtime
 # ---------------------------------------------------------------------------
 FROM python:3.14-slim AS runtime
+ARG GIT_SHA=""
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH=/app/.venv/bin:$PATH
+    PATH=/app/.venv/bin:$PATH \
+    LEHRJAHRE_GIT_SHA=$GIT_SHA
 WORKDIR /app
 
 RUN groupadd --system --gid 10001 lehrjahre \
@@ -42,6 +49,7 @@ RUN groupadd --system --gid 10001 lehrjahre \
 COPY --from=python-build /app/.venv /app/.venv
 COPY backend /app/backend
 COPY data/lehrplan /app/data/lehrplan
+COPY VERSION /app/VERSION
 COPY --from=frontend-build /app/dist /app/frontend/dist
 COPY pyproject.toml uv.lock /app/
 

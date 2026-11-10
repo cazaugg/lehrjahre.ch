@@ -4258,6 +4258,19 @@ def test_health_reports_mail_configuration(client):
     # Test fixture disables SMTP explicitly -> mail is "not configured",
     # which development outbox handling covers.
     assert data["mail_configured"] is False
+    # Version matches the repository VERSION file (semver of CHANGELOG.MD).
+    from backend.config import APP_VERSION
+
+    assert data["version"] == APP_VERSION == "0.1.0"
+    assert data["git_sha"] == ""
+
+
+def test_health_reports_git_sha_when_stamped(client):
+    app = client.application
+    with app.app_context():
+        app.config["GIT_SHA"] = "a1b2c3d"
+    res = client.get("/api/health")
+    assert res.get_json()["git_sha"] == "a1b2c3d"
 
 
 def test_production_without_smtp_warns_at_startup(tmp_path, caplog):
