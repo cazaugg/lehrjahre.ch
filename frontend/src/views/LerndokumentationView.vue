@@ -395,6 +395,7 @@ function formatDate(d) {
         title="Ausbildungsgespräche & Probezeitgespräch"
         subtitle="Halbjährliche Bildungsberichte, Probezeitprotokolle und Zielvereinbarungen"
         :prefer-text-editor="true"
+        file-accept="application/pdf,.pdf,.doc,.docx"
       />
     </div>
 
@@ -405,6 +406,7 @@ function formatDate(d) {
         title="Lernjournal (Arbeits- und Lernreflexion)"
         subtitle="Regelmässige Einträge zu ausgeführten Arbeiten, Erkenntnissen und Lernschritten (gespeichert im Firmenordner)"
         :prefer-text-editor="true"
+        file-accept="application/pdf,.pdf,.doc,.docx"
       />
     </div>
 

@@ -343,6 +343,10 @@ def serialize_eval(
         data["eval_text"] = ""
         data["score_type"] = None
         data["score_value"] = None
+        # Beigefügte Auswertungsdateien folgen der Freigabe: erst nach der
+        # Freigabe (oder dem Projektabschluss) sind sie für Lernende sichtbar.
+        data["document_id"] = None
+        data["document"] = None
     # Never expose a supervisor from another company, even for legacy rows.
     if (
         evaluation.supervisor_user

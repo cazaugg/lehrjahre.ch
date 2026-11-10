@@ -18,7 +18,9 @@ const props = defineProps({
   subtitle: { type: String, default: '' },
   ownerId: { type: Number, default: null },
   allowTemplates: { type: Boolean, default: true },
-  preferTextEditor: { type: Boolean, default: false }
+  preferTextEditor: { type: Boolean, default: false },
+  /** Optional accept-Attribut, z. B. «.pdf,.doc,.docx» für PDF/Word-Sektionen */
+  fileAccept: { type: String, default: '' }
 })
 
 const auth = useAuthStore()
@@ -44,6 +46,12 @@ const types = computed(() => {
   }
   return props.documentType ? [props.documentType] : []
 })
+
+// Sektionen mit Pdf/Word-Schulpflicht (Lernjournal & Ausbildungsgespräch)
+// erhalten zusätzlich zum Texteditor den Upload-Button.
+const allowFileUploadChoice = computed(
+  () => props.fileAccept !== '' || !props.preferTextEditor
+)
 
 const hasMultipleTypes = computed(() => types.value.length > 1)
 
@@ -434,10 +442,28 @@ async function saveDocument() {
         if (mode.value === 'text') {
           payload.content = formContent.value
         }
-        await apiFetch(`/api/documents/${editingDoc.value.id}`, {
-          method: 'PUT',
-          body: payload
-        })
+        if (selectedFile.value) {
+          // Neue Datei hochladen: Metadaten als multipart/form-data senden,
+          // damit die Datei serverseitig ersetzt werden kann.
+          const fd = new FormData()
+          fd.append('file', selectedFile.value)
+          fd.append('name', payload.name)
+          fd.append('description', payload.description)
+          fd.append('is_done', String(payload.is_done))
+          fd.append('is_template', String(payload.is_template))
+          if (payload.goals) {
+            fd.append('goals', JSON.stringify(payload.goals))
+          }
+          await apiFetch(`/api/documents/${editingDoc.value.id}`, {
+            method: 'PUT',
+            body: fd
+          })
+        } else {
+          await apiFetch(`/api/documents/${editingDoc.value.id}`, {
+            method: 'PUT',
+            body: payload
+          })
+        }
         expandedIds.value[editingDoc.value.id] = true
       }
     } else if (mode.value === 'file') {
@@ -667,7 +693,7 @@ function formatDate(iso) {
         </div>
         <div v-if="canCreate" class="flex-gap">
           <EditButton
-            v-if="!preferTextEditor"
+            v-if="allowFileUploadChoice"
             size="lg"
             show-label
             label="Datei hochladen"
@@ -989,7 +1015,27 @@ function formatDate(iso) {
 
           <div v-if="!editingDoc" class="form-group">
             <label class="form-label">Datei auswählen *</label>
-            <input type="file" class="form-control" required @change="onFileChange" />
+            <input
+              type="file"
+              class="form-control"
+              :accept="props.fileAccept || undefined"
+              required
+              @change="onFileChange"
+            />
+          </div>
+
+          <!-- Beim Bearbeiten: bestehende Datei optional durch eine neue ersetzen -->
+          <div v-if="editingDoc" class="form-group">
+            <label class="form-label">Datei ersetzen (optional)</label>
+            <input
+              type="file"
+              class="form-control"
+              :accept="props.fileAccept || undefined"
+              @change="onFileChange"
+            />
+            <span v-if="editingDoc.filename" class="text-muted" style="font-size: 0.85rem">
+              Aktuelle Datei: {{ editingDoc.filename }}
+            </span>
           </div>
 
           <div class="flex-gap" style="margin-bottom: var(--space-4)">

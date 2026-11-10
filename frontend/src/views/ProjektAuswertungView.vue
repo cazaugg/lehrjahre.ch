@@ -31,6 +31,12 @@ const projectEvalText = ref('')
 const projectScoreType = ref('grade') // '' | 'grade' | 'percent'
 const projectScoreValue = ref('')
 
+// Beigefügte Auswertungsdatei (PDF / Word) für die Gesamtprojekt-Bewertung
+const evalFile = ref(null)
+const removeEvalFile = ref(false)
+const currentEvalId = ref(null)
+const currentEvalDoc = ref(null)
+
 const taskEvals = ref([]) // [{ task_id, title, eval_text, score_type, score_value }]
 const goalEvals = ref([]) // [{ goal, eval_text }]
 
@@ -91,6 +97,10 @@ function hydrateStudentForm(sid) {
     projEv?.score_value !== null && projEv?.score_value !== undefined
       ? String(projEv.score_value)
       : ''
+  currentEvalId.value = projEv?.id || null
+  currentEvalDoc.value = projEv?.document || null
+  evalFile.value = null
+  removeEvalFile.value = false
 
   isReleased.value = allEvals.some((e) => e.is_released)
 
@@ -133,6 +143,13 @@ function submissionFor(targetProjId, studentId) {
   )
 }
 
+function onEvalFileChange(event) {
+  evalFile.value = event.target.files?.[0] || null
+  if (evalFile.value) {
+    removeEvalFile.value = false
+  }
+}
+
 async function saveEvaluation() {
   if (!selectedStudentId.value) {
     error.value = 'Bitte wählen Sie eine/n Lernende/n aus.'
@@ -143,7 +160,7 @@ async function saveEvaluation() {
   successMsg.value = ''
   saving.value = true
   try {
-    await apiFetch(`/api/evaluation/project/${projectId.value}`, {
+    const res = await apiFetch(`/api/evaluation/project/${projectId.value}`, {
       method: 'POST',
       body: {
         global_eval_text: globalEvalText.value,
@@ -169,6 +186,21 @@ async function saveEvaluation() {
         }))
       }
     })
+
+    const evalId = res?.data?.project_eval_id || currentEvalId.value
+    if (evalId) {
+      if (removeEvalFile.value || evalFile.value) {
+        await apiFetch(`/api/evaluation/${evalId}/file`, { method: 'DELETE' })
+      }
+      if (evalFile.value) {
+        const fd = new FormData()
+        fd.append('file', evalFile.value)
+        await apiFetch(`/api/evaluation/${evalId}/file`, {
+          method: 'POST',
+          body: fd
+        })
+      }
+    }
     await loadProject()
     successMsg.value = 'Auswertung gespeichert.'
   } catch (e) {
@@ -363,6 +395,49 @@ async function saveGlobalEvaluation(markCompleted = false) {
                       :placeholder="projectScoreType === 'percent' ? 'z.B. 85' : 'z.B. 5.2'"
                     />
                   </div>
+                </div>
+              </div>
+
+              <!-- Beigefügte Auswertungsdatei (PDF / Word) -->
+              <div class="form-group" style="margin-top: var(--space-3)">
+                <label class="form-label">
+                  Auswertungsdatei (PDF / Word, optional)
+                </label>
+
+                <div
+                  v-if="currentEvalDoc && !removeEvalFile"
+                  class="flex-gap"
+                  style="margin-bottom: var(--space-2)"
+                >
+                  <span class="badge badge-info">
+                    {{ currentEvalDoc.filename || currentEvalDoc.name }}
+                  </span>
+                  <a
+                    class="btn btn-sm"
+                    :href="`/api/evaluation/${currentEvalId}/file`"
+                    target="_self"
+                  >
+                    Datei herunterladen
+                  </a>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    @click="removeEvalFile = true; evalFile = null"
+                  >
+                    Datei entfernen
+                  </button>
+                </div>
+
+                <input
+                  type="file"
+                  class="form-control"
+                  accept="application/pdf,.pdf,.doc,.docx"
+                  @change="onEvalFileChange"
+                />
+                <div class="text-muted" style="font-size: 0.85rem; margin-top: 4px">
+                  Beispiel: ausgefülltes Bewertungsformular. Wird mit der Auswertung gespeichert
+                  und ist für den/die Lernende/n erst nach der Freigabe sichtbar. Eine bestehende
+                  Datei wird beim Hochladen ersetzt.
                 </div>
               </div>
             </div>

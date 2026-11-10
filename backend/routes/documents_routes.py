@@ -287,7 +287,14 @@ def update_document(doc_id):
             }
         ), 403
 
-    data = request.get_json(silent=True) or {}
+    # Support both multipart/form-data (file upload/replacement) and JSON
+    uploaded_file = None
+    if request.content_type and "multipart/form-data" in request.content_type:
+        form = request.form
+        uploaded_file = request.files.get("file")
+        data = {key: value for key, value in form.items() if key != "file"}
+    else:
+        data = request.get_json(silent=True) or {}
 
     # Never let a supervisor turn someone else's private document into a
     # company-wide template. Templates must be created as templates.
@@ -412,8 +419,25 @@ def update_document(doc_id):
         )
         doc.path = rel_path
 
+    # Replace the stored file (e.g. new PDF/Word version) when a file was
+    # uploaded together with the metadata update.
+    old_file_path = None
+    if uploaded_file and uploaded_file.filename:
+        try:
+            clean_filename, rel_path = save_uploaded_file(
+                uploaded_file, tenants.current_company().name
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        if rel_path != doc.path:
+            old_file_path = doc.path
+        doc.filename = clean_filename
+        doc.path = rel_path
+
     doc.updated_date = datetime.now(timezone.utc)
     db.session.commit()
+    if old_file_path:
+        delete_stored_file(old_file_path)
     audit(
         "document_updated",
         document_id=doc.id,
