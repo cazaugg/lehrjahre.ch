@@ -6,6 +6,8 @@
 //   npm run setup
 //
 // Options:
+//   --force         (seed only) delete the demo company and its data folder,
+//                   then reseed everything from scratch
 //   --api-port N    prefer this Flask port (default 5000)
 //   --web-port N    prefer this Vite port (default 5173)
 //   --strict-port   fail instead of shifting when a port is taken
@@ -272,7 +274,12 @@ function cmdSeed() {
   checkNode()
   mkdirSync(path.join(ROOT, 'data'), { recursive: true })
   ensureBackend()
-  const result = spawnSync('uv', ['run', 'python', '-m', 'backend.seed'], {
+  // `npm run seed --force` is also accepted: npm doesn't forward flags after
+  // a script name without `--`, but exposes them as npm_config_* env vars.
+  const force = has('--force') || process.env.npm_config_force != null
+  const args = ['run', 'python', '-m', 'backend.seed']
+  if (force) args.push('--force')
+  const result = spawnSync('uv', args, {
     cwd: ROOT,
     env: {
       ...process.env,

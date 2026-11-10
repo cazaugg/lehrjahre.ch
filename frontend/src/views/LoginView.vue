@@ -95,7 +95,7 @@ function fillDemo(demoEmail) {
             class="btn btn-sm"
             @click="fillDemo('sandra.meier@vektorwerk.ch')"
           >
-            Ausbildnerin (HR)
+            Administratorin
           </button>
           <button
             type="button"

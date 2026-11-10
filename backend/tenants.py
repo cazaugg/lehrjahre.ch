@@ -125,7 +125,13 @@ def _state():
 
 def reset_engine_cache() -> None:
     """Drop cached tenant engines (e.g. after deleting a company folder)."""
-    _state()["engines"].clear()
+    engines = _state()["engines"]
+    for engine in engines.values():
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+    engines.clear()
 
 
 def tenant_engine(company):
